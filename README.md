@@ -27,6 +27,25 @@ Requires `curl` and `jq`. For Arabic, install `noto-fonts` and `noto-fonts-extra
 (`Noto Naskh Arabic`, and `Noto Nastaliq Urdu` if you read Urdu); without them
 fontconfig substitutes per glyph and long passages look ragged.
 
+## Remove
+
+```bash
+omarchy plugin remove io.github.kusumaindraputra.daily-deen
+```
+
+That takes the widget out of the bar and deletes the plugin folder. The downloaded
+editions and the current pick live outside it and are left alone, so a reinstall
+picks up where you left off. To clear those too:
+
+```bash
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-daily-deen" \
+       "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-daily-deen"
+```
+
+Nothing else on your system is touched. At runtime the plugin writes only to those
+two directories, plus its own entry in Omarchy's plugin settings when you change
+something in the panel. It never edits your Hyprland configuration.
+
 ## Where the text comes from
 
 [`fawazahmed0/quran-api`](https://github.com/fawazahmed0/quran-api) and
@@ -145,10 +164,10 @@ o.bind("SUPER + SHIFT + Q", "Daily ayah", "omarchy-shell shell toggle io.github.
 node --test "tests/*.test.js"    # Model.js, Grades.js, I18n.js
 ./tests/grades.test.sh           # the classifier against the real corpus
 omarchy plugin validate .
-./bin/dev-install                # copy into ~/.config/omarchy/plugins and reload
+./bin/dev-sync                   # copy into ~/.config/omarchy/plugins and reload
 ```
 
-Work in a checkout outside `~/.config/omarchy/plugins` and sync with `dev-install`:
+Work in a checkout outside `~/.config/omarchy/plugins` and sync with `dev-sync`:
 the PluginRegistry watches that directory with `inotifywait` and reloads **every** plugin
 on any write there. Copy rather than symlink — `omarchy plugin validate` rejects a symlink
 anywhere in a plugin folder, and that is a deliberate security boundary.
