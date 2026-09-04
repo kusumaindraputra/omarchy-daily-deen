@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.keyaypi.daily-deen",
+  "name": "Daily Ayah & Hadith",
+  "version": "0.1.0",
+  "author": "keyaypi",
+  "license": "MIT",
+  "description": "A rotating Qur'an ayah and hadith in the bar, with a panel for the full text, translation, reference and grading. 98 languages for the Qur'an, 9 for hadith, and it keeps working offline.",
+  "homepage": "https://github.com/keyaypi/omarchy-daily-deen",
+  "repository": "https://github.com/keyaypi/omarchy-daily-deen",
+  "keywords": ["quran", "hadith", "islam", "ayah", "deen", "arabic"],
+
+  "kinds": ["service", "bar-widget"],
+
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+
+  "barWidget": {
+    "displayName": "Daily Ayah & Hadith",
+    "description": "A rotating ayah and hadith, with the full text in a panel.",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+
+    "defaults": {
+      "quranEdition": "ara-quranuthmanihaf",
+      "quranTranslationEdition": "eng-abdelhaleem",
+      "hadithEdition": "eng-abudawud",
+      "hadithArabicEdition": "",
+      "contentLanguage": "English",
+      "hadithLanguage": "English",
+      "uiLanguage": "auto",
+      "gradeFilter": "sahih-hasan",
+      "gradeAuthority": "Al-Albani",
+      "rotationHours": 6,
+      "rotationMode": "deterministic",
+      "notify": true,
+      "barDisplay": "glyph",
+      "showAyah": true,
+      "showHadith": true,
+      "showArabic": true
+    },
+
+    "schema": [
+      { "key": "contentLanguage", "type": "string", "label": "Translation language", "defaultValue": "English",
+        "description": "Language of the Qur'an translation. 98 are available. Pick it in the panel — the list comes from the API rather than from this file, so it never goes stale." },
+      { "key": "quranEdition", "type": "string", "label": "Qur'an script", "defaultValue": "ara-quranuthmanihaf",
+        "description": "Arabic edition slug, e.g. ara-quranuthmanihaf. Empty shows the translation alone." },
+      { "key": "quranTranslationEdition", "type": "string", "label": "Qur'an translation", "defaultValue": "eng-abdelhaleem",
+        "description": "Translation edition slug, e.g. ind-indonesianislam." },
+
+      { "key": "hadithLanguage", "type": "string", "label": "Hadith language", "defaultValue": "English",
+        "description": "Hadith translations exist in nine languages, and not every book in every one." },
+      { "key": "hadithEdition", "type": "string", "label": "Hadith edition", "defaultValue": "eng-abudawud",
+        "description": "Edition slug, e.g. ind-abudawud." },
+      { "key": "hadithArabicEdition", "type": "string", "label": "Hadith in Arabic", "defaultValue": "",
+        "description": "Optional Arabic edition of the same book, shown above the translation." },
+
+      { "key": "gradeFilter", "type": "enum", "label": "Only show hadith graded",
+        "options": ["any", "sahih", "sahih-hasan", "daif"], "defaultValue": "sahih-hasan",
+        "description": "Sahih al-Bukhari and Sahih Muslim carry no grade strings because every hadith in them is authentic by construction; they are treated as sahih. A collection with no gradings at all ignores this filter and says so." },
+      { "key": "gradeAuthority", "type": "string", "label": "Preferred grader", "defaultValue": "Al-Albani",
+        "description": "When several scholars graded a hadith, this one decides. Leave empty to take the strictest verdict present." },
+
+      { "key": "rotationHours", "type": "integer", "label": "Rotate every (hours)",
+        "min": 1, "max": 168, "step": 1, "defaultValue": 6 },
+      { "key": "rotationMode", "type": "enum", "label": "Choice",
+        "options": ["deterministic", "random"], "defaultValue": "deterministic",
+        "description": "Deterministic derives the pick from the clock and the settings, so every machine configured alike shows the same ayah. Random picks freely and avoids recent repeats." },
+
+      { "key": "notify", "type": "boolean", "label": "Notify when it rotates", "defaultValue": true },
+      { "key": "barDisplay", "type": "enum", "label": "Show in the bar",
+        "options": ["glyph", "glyph-reference", "glyph-snippet"], "defaultValue": "glyph" },
+
+      { "key": "showAyah", "type": "boolean", "label": "Show an ayah", "defaultValue": true },
+      { "key": "showHadith", "type": "boolean", "label": "Show a hadith", "defaultValue": true },
+      { "key": "showArabic", "type": "boolean", "label": "Show the Arabic", "defaultValue": true },
+
+      { "key": "uiLanguage", "type": "enum", "label": "Plugin language",
+        "options": ["auto", "en", "id", "ms", "ar", "tr", "ur", "bn", "fr", "ru"], "defaultValue": "auto",
+        "description": "Language for this plugin's own labels, which is a separate choice from the language of the translations. Auto follows the translation language when this plugin ships that locale, and English otherwise." }
+    ]
+  }
+}

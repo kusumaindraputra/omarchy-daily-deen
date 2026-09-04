@@ -1,0 +1,458 @@
+#!/usr/bin/env bash
+#
+# Data plane for the Daily Ayah & Hadith plugin.
+#
+# Everything that touches the network or a multi-megabyte JSON file happens
+# here, out of process. omarchy-shell is a single Quickshell process on a single
+# GUI thread: a JSON.parse of a 4.8 MB hadith edition there would freeze the
+# bar, the panels, the notification daemon and the lock screen for as long as it
+# took. jq does that work in a subprocess and QML only ever sees the ~2 KB pick.
+#
+#   deen-fetch catalog [--force]
+#   deen-fetch sync    --quran SLUG [--quran-translation SLUG] [--hadith SLUG]
+#                      [--hadith-arabic SLUG] [--force]
+#   deen-fetch pick    [--force] [--offline] [options...]
+#   deen-fetch status
+#
+# pick is idempotent and does its own due check, so a caller can simply run it
+# on a timer and read stdout.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+QURAN_API="https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1"
+HADITH_API="https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1"
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-daily-deen"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-daily-deen"
+GRADES_JQ="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/grades.jq"
+
+CATALOG="$CACHE_DIR/catalog.json"
+CURRENT="$STATE_DIR/current.json"
+SEEN="$STATE_DIR/seen.json"
+SEEN_MAX=60
+
+OFFLINE=0
+
+die() { echo "deen-fetch: $*" >&2; exit 1; }
+note() { [[ -n ${DEEN_DEBUG:-} ]] && echo "deen-fetch: $*" >&2 || true; }
+now_ms() { echo $(( $(date +%s) * 1000 )); }
+
+# Atomic because readers are live: the shell has a FileView watching
+# current.json, and a torn read there is a parse error in the bar.
+write_atomic() {
+  local dest="$1" tmp
+  mkdir -p "$(dirname "$dest")"
+  tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").XXXXXX")"
+  cat > "$tmp"
+  mv -f "$tmp" "$dest"
+}
+
+# Conditional GET. The @1 tag is mutable upstream, so an ETag is how we notice a
+# new edition without re-downloading megabytes on every sync.
+fetch() {
+  local url="$1" dest="$2" force="${3:-0}" etag_file
+  etag_file="$CACHE_DIR/etag/$(echo -n "$url" | md5sum | cut -d' ' -f1)"
+  mkdir -p "$CACHE_DIR/etag" "$(dirname "$dest")"
+
+  if (( OFFLINE )); then
+    [[ -s $dest ]] && return 0
+    return 1
+  fi
+  if (( ! force )) && [[ -s $dest ]] && [[ -s $etag_file ]]; then
+    local tmp; tmp="$(mktemp)"
+    if curl -fsS --compressed --max-time 60 --retry 2 --retry-delay 1 \
+         --etag-compare "$etag_file" --etag-save "$etag_file" \
+         -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null | grep -q '^304$'; then
+      rm -f "$tmp"; return 0
+    fi
+    [[ -s $tmp ]] && { mv -f "$tmp" "$dest"; return 0; }
+    rm -f "$tmp"; return 0
+  fi
+
+  local tmp; tmp="$(mktemp)"
+  if curl -fsS --compressed --max-time 120 --retry 2 --retry-delay 1 \
+       --etag-save "$etag_file" -o "$tmp" "$url"; then
+    mv -f "$tmp" "$dest"; return 0
+  fi
+  rm -f "$tmp"
+  [[ -s $dest ]] && return 0
+  return 1
+}
+
+# ----------------------------------------------------------------- catalog
+
+cmd_catalog() {
+  local force=0
+  while (( $# )); do case $1 in --force) force=1;; *) die "unknown flag $1";; esac; shift; done
+
+  local q h info
+  q="$CACHE_DIR/raw/quran-editions.json"
+  h="$CACHE_DIR/raw/hadith-editions.json"
+  info="$CACHE_DIR/raw/quran-info.json"
+
+  fetch "$QURAN_API/editions.min.json"  "$q"    "$force" || die "cannot reach quran editions and no cache"
+  fetch "$HADITH_API/editions.json"     "$h"    "$force" || die "cannot reach hadith editions and no cache"
+  fetch "$QURAN_API/info.min.json"      "$info" "$force" || die "cannot reach quran info and no cache"
+
+  # The top-level keys are underscore-form (eng_abdelhaleem); the URL slug lives
+  # in .name (eng-abdelhaleem). Reading keys[] here would 404 every request.
+  #
+  # The -la / -lad suffixes are Latin transliterations rather than translations,
+  # so they are flagged and kept out of the translation picker by default.
+  jq -n \
+    --slurpfile q "$q" --slurpfile h "$h" --slurpfile info "$info" \
+    --argjson now "$(now_ms)" --arg version "$VERSION" '
+    {
+      version: 1,
+      fetchedAt: $now,
+      generatedBy: ("deen-fetch " + $version),
+      quran: ( $q[0] | to_entries | map(.value | {
+          slug: .name, language: .language, author: .author,
+          direction: (.direction // "ltr"),
+          latin: (.name | test("-lad?[0-9]*$")),
+          comments: (.comments // ""), source: (.source // "")
+        }) | sort_by(.language, .author) ),
+      hadith: ( $h[0] | to_entries | map(.key as $book | .value.collection[] | {
+          slug: .name, book: $book, language: .language,
+          direction: (.direction // "ltr"),
+          hasSections: (.has_sections // false),
+          comments: (.comments // "")
+        }) | sort_by(.language, .book) ),
+      books: ( $h[0] | to_entries | map({ key: .key, value: { name: .value.name } }) | from_entries ),
+      surahs: ( $info[0].chapters | map({
+          n: .chapter, name: .name, english: .englishname,
+          arabic: .arabicname, revelation: .revelation,
+          ayahs: (.verses | length)
+        }) )
+    }' | write_atomic "$CATALOG"
+
+  jq -c '{quran: (.quran|length), hadith: (.hadith|length), books: (.books|length), surahs: (.surahs|length)}' "$CATALOG"
+}
+
+# ------------------------------------------------------------------- sync
+
+quran_path()  { echo "$CACHE_DIR/quran/$1.json"; }
+hadith_path() { echo "$CACHE_DIR/hadith/$1.json"; }
+index_path()  { echo "$CACHE_DIR/index/$1.json"; }
+meta_path()   { echo "$CACHE_DIR/index/$1.meta.json"; }
+
+book_of() {
+  [[ -s $CATALOG ]] || return 1
+  jq -r --arg s "$1" '.hadith[] | select(.slug == $s) | .book' "$CATALOG" | head -1
+}
+
+sync_quran() {
+  local slug="$1" force="${2:-0}"
+  [[ -n $slug ]] || return 0
+  fetch "$QURAN_API/editions/$slug.min.json" "$(quran_path "$slug")" "$force" \
+    || { note "quran edition $slug unavailable"; return 1; }
+}
+
+# Building the index is the whole reason the offline mode works. Hadith numbering
+# is not contiguous — abudawud stops at 5274 but not every number below it
+# exists — so picking a random number in a range 404s regularly. The index
+# enumerates only numbers that are actually present, per grade class, so a pick
+# can never miss.
+sync_hadith() {
+  local slug="$1" force="${2:-0}" authority="${3:-}" book path
+  [[ -n $slug ]] || return 0
+  path="$(hadith_path "$slug")"
+  fetch "$HADITH_API/editions/$slug.min.json" "$path" "$force" \
+    || { note "hadith edition $slug unavailable"; return 1; }
+
+  book="$(book_of "$slug" || true)"
+  [[ -n $book ]] || book="${slug#*-}"
+
+  local idx; idx="$(index_path "$slug")"
+  if (( ! force )) && [[ -s $idx ]] && [[ $idx -nt $path ]]; then
+    local cached_auth; cached_auth="$(jq -r '.authority // ""' "$idx")"
+    [[ $cached_auth == "$authority" ]] && return 0
+  fi
+
+  jq -c --arg book "$book" --arg slug "$slug" --arg auth "$authority" \
+        --argjson now "$(now_ms)" -f <(cat "$GRADES_JQ"; cat <<'JQ'
+    . as $doc
+    | ($doc.hadiths | map({ n: .hadithnumber, c: hadith_grade_class($book; $auth) })) as $rows
+    | {
+        version: 1, edition: $slug, book: $book, authority: $auth,
+        builtAt: $now,
+        total: ($rows | length),
+        classes: ( reduce $rows[] as $r ({}; .[$r.c] += [$r.n]) ),
+        graders: ( $doc.hadiths | map(.grades // [] | map(.name)) | flatten | unique )
+      }
+JQ
+  ) "$path" | write_atomic "$idx"
+
+  jq -c '{edition, book, total, counts: (.classes | map_values(length)), graders}' "$idx" \
+    | write_atomic "$(meta_path "$slug")"
+}
+
+cmd_sync() {
+  local q="" qt="" h="" ha="" auth="" force=0
+  while (( $# )); do
+    case $1 in
+      --quran) q="$2"; shift;;
+      --quran-translation) qt="$2"; shift;;
+      --hadith) h="$2"; shift;;
+      --hadith-arabic) ha="$2"; shift;;
+      --authority) auth="$2"; shift;;
+      --force) force=1;;
+      --offline) OFFLINE=1;;
+      *) die "unknown flag $1";;
+    esac; shift
+  done
+  [[ -s $CATALOG ]] || cmd_catalog >/dev/null
+  sync_quran  "$q"  "$force" || true
+  sync_quran  "$qt" "$force" || true
+  sync_hadith "$h"  "$force" "$auth" || true
+  sync_hadith "$ha" "$force" "$auth" || true
+  echo '{"ok":true}'
+}
+
+# ------------------------------------------------------------------- pick
+
+# A stable 31-bit number from a string. Used for the deterministic mode, where
+# the pick is a function of the clock slot and the settings rather than of
+# chance — so two machines configured alike show the same ayah, and re-running
+# pick inside one slot is a no-op instead of a reshuffle.
+hash31() { printf '%s' "$1" | cksum | cut -d' ' -f1; }
+
+rand31() { od -An -N4 -tu4 /dev/urandom | tr -d ' \n'; }
+
+seen_has() { [[ -s $SEEN ]] && jq -e --arg k "$1" 'index($k) != null' "$SEEN" >/dev/null 2>&1; }
+seen_push() {
+  local key="$1" cur='[]'
+  [[ -s $SEEN ]] && cur="$(cat "$SEEN")"
+  jq -c --arg k "$key" --argjson max "$SEEN_MAX" \
+    '(. // []) - [$k] + [$k] | if length > $max then .[length-$max:] else . end' \
+    <<<"$cur" | write_atomic "$SEEN"
+}
+
+classes_for_filter() {
+  case "$1" in
+    any)         echo '["sahih","hasan","daif","maudu","unknown"]';;
+    sahih)       echo '["sahih"]';;
+    sahih-hasan) echo '["sahih","hasan"]';;
+    daif)        echo '["daif"]';;
+    *) die "unknown grade filter $1";;
+  esac
+}
+
+cmd_pick() {
+  local force=0 interval=6 mode="deterministic" no_sync=0
+  local q="" qt="" h="" ha="" filter="sahih-hasan" auth=""
+  local show_ayah=1 show_hadith=1
+
+  while (( $# )); do
+    case $1 in
+      --force) force=1;;
+      --offline) OFFLINE=1;;
+      --no-sync) no_sync=1;;
+      --interval-hours) interval="$2"; shift;;
+      --mode) mode="$2"; shift;;
+      --quran) q="$2"; shift;;
+      --quran-translation) qt="$2"; shift;;
+      --hadith) h="$2"; shift;;
+      --hadith-arabic) ha="$2"; shift;;
+      --grade-filter) filter="$2"; shift;;
+      --authority) auth="$2"; shift;;
+      --no-ayah) show_ayah=0;;
+      --no-hadith) show_hadith=0;;
+      *) die "unknown flag $1";;
+    esac; shift
+  done
+  [[ $interval =~ ^[0-9]+$ ]] && (( interval >= 1 )) || interval=6
+
+  local fingerprint prev_fp prev_at now interval_ms
+  fingerprint="$(hash31 "$q|$qt|$h|$ha|$filter|$auth|$interval|$mode|$show_ayah|$show_hadith")"
+  now="$(now_ms)"
+  interval_ms=$(( interval * 3600000 ))
+
+  prev_fp=""; prev_at=0
+  if [[ -s $CURRENT ]]; then
+    prev_fp="$(jq -r '.fingerprint // ""' "$CURRENT" 2>/dev/null || echo "")"
+    prev_at="$(jq -r '.chosenAt // 0' "$CURRENT" 2>/dev/null || echo 0)"
+  fi
+
+  # Comparing a persisted timestamp, rather than running a Timer whose interval
+  # is the rotation period, is what makes the pick survive a shell restart and
+  # makes a laptop that slept for eight hours rotate once on wake instead of
+  # eight times.
+  if (( ! force )) && [[ $prev_fp == "$fingerprint" ]] && (( now - prev_at < interval_ms )); then
+    cat "$CURRENT"; return 0
+  fi
+
+  # Built as an array rather than ${OFFLINE:+--offline}: OFFLINE is 0 or 1, and
+  # ":+" fires on any non-empty value, so "0" would have passed --offline on
+  # every single pick and nothing would ever have been downloaded.
+  local sync_flags=()
+  (( OFFLINE )) && sync_flags+=(--offline)
+  (( no_sync )) || cmd_sync --quran "$q" --quran-translation "$qt" \
+      --hadith "$h" --hadith-arabic "$ha" --authority "$auth" \
+      "${sync_flags[@]}" >/dev/null 2>&1 || true
+
+  local slot seed
+  slot=$(( now / interval_ms ))
+  if [[ $mode == random ]]; then seed="$(rand31)"; else seed="$(hash31 "$fingerprint|$slot")"; fi
+
+  local ayah_json="null" hadith_json="null" source="cache" fallback=false
+
+  # ---- ayah
+  if (( show_ayah )); then
+    local primary="" secondary=""
+    [[ -n $q  && -s $(quran_path "$q")  ]] && primary="$(quran_path "$q")"
+    [[ -n $qt && -s $(quran_path "$qt") ]] && secondary="$(quran_path "$qt")"
+    [[ -z $primary && -n $secondary ]] && { primary="$secondary"; secondary=""; }
+
+    if [[ -n $primary ]]; then
+      local total idx tries=0
+      total="$(jq '.quran | length' "$primary")"
+      idx=$(( seed % total ))
+      if [[ $mode == random ]]; then
+        while (( tries < 20 )) && seen_has "ayah:$(jq -r --argjson i "$idx" '.quran[$i] | "\(.chapter):\(.verse)"' "$primary")"; do
+          idx=$(( $(rand31) % total )); tries=$(( tries + 1 ))
+        done
+      fi
+      ayah_json="$(jq -c --argjson i "$idx" \
+        --arg ed "${q:-$qt}" --arg ted "$qt" \
+        --slurpfile cat "$CATALOG" \
+        --slurpfile tr "${secondary:-/dev/null}" '
+        .quran[$i] as $a
+        | ($cat[0].quran // [] | map({key:.slug, value:.}) | from_entries) as $eds
+        | ($cat[0].surahs // [] | map(select(.n == $a.chapter)) | first) as $s
+        | {
+            edition: $ed,
+            editionAuthor: ($eds[$ed].author // ""),
+            language: ($eds[$ed].language // ""),
+            direction: ($eds[$ed].direction // "ltr"),
+            surah: $a.chapter, ayah: $a.verse, text: $a.text,
+            surahName: ($s.name // ""), surahEnglish: ($s.english // ""),
+            surahArabic: ($s.arabic // ""), ayahCount: ($s.ayahs // 0),
+            translationEdition: $ted,
+            translationAuthor: ($eds[$ted].author // ""),
+            translationLanguage: ($eds[$ted].language // ""),
+            translationDirection: ($eds[$ted].direction // "ltr"),
+            translation: ( if ($tr | length) > 0
+                           then ($tr[0].quran | map(select(.chapter == $a.chapter and .verse == $a.verse)) | first | .text // "")
+                           else "" end )
+          }' "$primary")"
+      seen_push "ayah:$(jq -r '"\(.surah):\(.ayah)"' <<<"$ayah_json")"
+    fi
+  fi
+
+  # ---- hadith
+  if (( show_hadith )); then
+    local hpath idx_file
+    hpath="$(hadith_path "$h")"; idx_file="$(index_path "$h")"
+    if [[ -n $h && -s $hpath && -s $idx_file ]]; then
+      local wanted numbers count
+      wanted="$(classes_for_filter "$filter")"
+      numbers="$(jq -c --argjson want "$wanted" '[.classes | to_entries[] | select(.key as $k | $want | index($k)) | .value[]] | sort' "$idx_file")"
+      count="$(jq 'length' <<<"$numbers")"
+
+      # A book with no grade strings at all (Nawawi's Forty, Forty Qudsi) would
+      # otherwise return nothing under any filter but "any". Falling back and
+      # saying so beats showing an empty panel.
+      if (( count == 0 )); then
+        numbers="$(jq -c '[.classes[][]] | sort' "$idx_file")"
+        count="$(jq 'length' <<<"$numbers")"
+        fallback=true
+      fi
+
+      if (( count > 0 )); then
+        local pos num tries=0
+        pos=$(( (seed / 7 + seed) % count ))
+        num="$(jq -r --argjson i "$pos" '.[$i]' <<<"$numbers")"
+        if [[ $mode == random ]]; then
+          while (( tries < 20 )) && seen_has "hadith:$h:$num"; do
+            pos=$(( $(rand31) % count )); num="$(jq -r --argjson i "$pos" '.[$i]' <<<"$numbers")"
+            tries=$(( tries + 1 ))
+          done
+        fi
+
+        local arabic_file="/dev/null"
+        [[ -n $ha && -s $(hadith_path "$ha") ]] && arabic_file="$(hadith_path "$ha")"
+
+        hadith_json="$(jq -c --argjson n "$num" --arg ed "$h" --arg aed "$ha" \
+          --slurpfile idx "$idx_file" --slurpfile cat "$CATALOG" \
+          --slurpfile ar "$arabic_file" '
+          .metadata as $meta
+          | (.hadiths | map(select(.hadithnumber == $n)) | first) as $x
+          | ($cat[0].hadith // [] | map({key:.slug, value:.}) | from_entries) as $eds
+          | ($idx[0].classes // {} | to_entries | map(select(.value | index($n)) | .key) | first) as $cls
+          | {
+              edition: $ed, book: $idx[0].book,
+              collectionName: ($meta.name // ""),
+              language: ($eds[$ed].language // ""),
+              direction: ($eds[$ed].direction // "ltr"),
+              number: $x.hadithnumber, arabicNumber: ($x.arabicnumber // $x.hadithnumber),
+              reference: ($x.reference // {}),
+              section: ( ($meta.section // {}) | to_entries | first | .value // "" ),
+              text: $x.text,
+              grades: ($x.grades // []),
+              gradeClass: ($cls // "unknown"),
+              authority: $idx[0].authority,
+              arabicEdition: $aed,
+              arabicDirection: ($eds[$aed].direction // "rtl"),
+              arabicText: ( if ($ar | length) > 0
+                            then ($ar[0].hadiths | map(select(.hadithnumber == $n)) | first | .text // "")
+                            else "" end )
+            }' "$hpath")"
+        seen_push "hadith:$h:$num"
+      fi
+    fi
+  fi
+
+  (( OFFLINE )) && source="offline" || source="network"
+
+  # Say what could not be produced rather than silently showing half a panel.
+  # Offline with an edition that was never cached is the common case.
+  local unavailable="[]"
+  (( show_ayah ))   && [[ $ayah_json   == "null" ]] && unavailable="$(jq -c '. + ["ayah"]' <<<"$unavailable")"
+  (( show_hadith )) && [[ $hadith_json == "null" ]] && unavailable="$(jq -c '. + ["hadith"]' <<<"$unavailable")"
+
+  if [[ $ayah_json == "null" && $hadith_json == "null" ]]; then
+    # Nothing to show and nothing cached: keep whatever was on screen rather
+    # than blanking the widget.
+    [[ -s $CURRENT ]] && { cat "$CURRENT"; return 0; }
+    die "no cached editions and nothing could be fetched"
+  fi
+
+  jq -n --argjson now "$now" --arg fp "$fingerprint" --argjson interval "$interval" \
+        --arg mode "$mode" --arg source "$source" --arg filter "$filter" \
+        --argjson fallback "$fallback" --arg version "$VERSION" \
+        --argjson ayah "$ayah_json" --argjson hadith "$hadith_json" \
+        --argjson unavailable "$unavailable" '
+    { version: 1, chosenAt: $now, intervalHours: $interval, mode: $mode,
+      fingerprint: $fp, source: $source, gradeFilter: $filter,
+      gradeFallback: $fallback, unavailable: $unavailable,
+      generatedBy: ("deen-fetch " + $version),
+      ayah: $ayah, hadith: $hadith }' | write_atomic "$CURRENT"
+
+  cat "$CURRENT"
+}
+
+cmd_status() {
+  if [[ -s $CURRENT ]]; then cat "$CURRENT"
+  else jq -n '{version:1, chosenAt:0, ayah:null, hadith:null, source:"empty"}'
+  fi
+}
+
+# ------------------------------------------------------------- dispatcher
+
+command -v jq   >/dev/null || die "jq is required"
+command -v curl >/dev/null || die "curl is required"
+[[ -s $GRADES_JQ ]] || die "grades.jq missing next to this script"
+mkdir -p "$CACHE_DIR" "$STATE_DIR"
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  catalog) cmd_catalog "$@";;
+  sync)    cmd_sync "$@";;
+  pick)    cmd_pick "$@";;
+  status)  cmd_status "$@";;
+  --version) echo "$VERSION";;
+  -h|--help) sed -n '3,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  *) die "unknown command: $cmd";;
+esac

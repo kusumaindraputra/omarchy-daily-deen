@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#
+# Copy the working tree into ~/.config/omarchy/plugins so the running shell
+# picks it up.
+#
+# Copy rather than symlink: omarchy-plugin-validate rejects a symlink anywhere
+# in a plugin folder, and that is a deliberate security boundary rather than an
+# oversight. Develop here, sync when you want to look at it.
+#
+# PluginRegistry watches the plugins directory with inotifywait and reloads
+# every plugin on any write there, so each sync costs a full shell plugin
+# reload. That is the reason not to edit in place while iterating on logic.
+
+set -euo pipefail
+
+SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ID="$(jq -r .id "$SRC/manifest.json")"
+DEST="$HOME/.config/omarchy/plugins/$ID"
+
+omarchy plugin validate "$SRC"
+
+mkdir -p "$DEST"
+rsync -a --delete \
+  --exclude '.git/' --exclude '.gitignore' --exclude 'tests/' \
+  "$SRC/" "$DEST/"
+
+echo "installed $ID -> $DEST"
+omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true
+
+if ! omarchy plugin list 2>/dev/null | grep -q "$ID.*enabled"; then
+  echo "not enabled yet — run: omarchy plugin enable $ID --section right"
+fi
