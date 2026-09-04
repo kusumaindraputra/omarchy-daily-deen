@@ -10,7 +10,7 @@ with a panel for the full text, translation, reference and grading.
 - **Works offline** once the editions you chose have been cached
 - **Its own UI language**, separate from the language of the translations
 
-![The panel, showing an ayah and a hadith in Indonesian](preview.png)
+![The panel, showing an ayah and a hadith in English](preview.png)
 
 ## Install
 
