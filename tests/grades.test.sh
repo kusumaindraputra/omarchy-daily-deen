@@ -44,6 +44,11 @@ assert() {
 assert "Hasan Sahih"                              hasan
 # A cross-reference is not a verdict on this chain, but it does mean sahih.
 assert "Sahih Bukhari (1224) Sahih Muslim (570)"  sahih
+# Parenthesised asides are dropped before any keyword is looked for. Only a
+# paren whose keyword outranks the verdict outside it can demonstrate that,
+# since first-match-wins puts daif above sahih, so this is a shape built to
+# prove the rule rather than a string lifted from the corpus.
+assert "Sahih (Da'if al-Jami 1234)"               sahih
 # Defects, not forgeries.
 assert "Munkar"                                   daif
 assert "Shadh"                                    daif

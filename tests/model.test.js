@@ -143,6 +143,13 @@ test("snippet cuts on a word boundary and marks the cut", () => {
   const cut = Model.snippet(text, 20)
   assert.ok(cut.length <= 21, cut)
   assert.ok(cut.endsWith("…"))
+  // Pin the retreat to the last space. A cap plus a trailing ellipsis is not
+  // enough on its own: a raw mid-word slice satisfies both, so dropping the
+  // word-boundary step would go unnoticed.
+  assert.equal(Model.snippet(text, 22), "the quick brown fox…")
+  // Unless there is no space to retreat to in the last 40% of the cut, where a
+  // hard cut is the only thing left to do.
+  assert.equal(Model.snippet("supercalifragilisticexpialidocious", 20), "supercalifragilistic…")
   assert.equal(Model.snippet("short", 20), "short")
 })
 
@@ -163,7 +170,11 @@ test("the bar never carries a paragraph", () => {
   }
   assert.equal(Model.barLabel(state, "glyph"), "")
   assert.equal(Model.barLabel(state, "glyph-reference"), "Al-Baqara 2:255")
-  assert.ok(Model.barLabel(state, "glyph-snippet").length <= 45)
+  // Bound it from below too: a barLabel that returned "" would satisfy a
+  // cap-only assertion, and an empty pill is exactly the failure worth catching.
+  const snippet = Model.barLabel(state, "glyph-snippet")
+  assert.ok(snippet.length > 0 && snippet.length <= 45, snippet)
+  assert.ok(snippet.startsWith("God: there is no god"), snippet)
 })
 
 // --- helper argv ----------------------------------------------------------

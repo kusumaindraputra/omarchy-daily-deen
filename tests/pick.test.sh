@@ -65,6 +65,23 @@ else
   fail=$(( fail + 1 ))
 fi
 
+# The recent-picks list must not be the only thing making a force move. It
+# rerolls whenever the seed lands on something already seen, which is enough to
+# hide a seed that never varies — so clear the list between presses and let the
+# seed answer on its own.
+declare -A unseeded=()
+for _ in 1 2 3 4 5; do
+  rm -f "$XDG_STATE_HOME/omarchy-daily-deen/seen.json"
+  unseeded["$(pick --force)"]=1
+done
+distinct="${#unseeded[@]}"
+if (( distinct >= 4 )); then
+  printf 'ok    a forced pick varies on its seed alone (%s distinct)\n' "$distinct"
+else
+  printf 'FAIL  with no recent-picks list to reroll against, five forced picks gave %s distinct verses\n' "$distinct"
+  fail=$(( fail + 1 ))
+fi
+
 # A force is not a mode switch: what it chose has to stick until the interval is
 # up, or the bar would drift every time the shell asked for the current pick.
 settled="$(pick --force)"
