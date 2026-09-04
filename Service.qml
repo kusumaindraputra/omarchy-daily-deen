@@ -50,6 +50,17 @@ Item {
   property bool syncing: false
 
   readonly property bool hasContent: Model.hasContent(current)
+
+  // Nothing may run until the shell has been injected: until then `settings`
+  // reads as {} and a rotation would be taken with the defaults rather than
+  // with what the user configured.
+  readonly property bool ready: shell !== null
+
+  // A passage this instance merely read off disk is not a rotation. Without
+  // this the service announces whatever was already on screen every time it
+  // starts — and during a shell restart, where the outgoing and incoming
+  // processes overlap, that arrives as two toasts a few seconds apart.
+  property bool primed: false
   readonly property string locale: I18n.resolve(
     setting("uiLanguage", "auto"),
     setting("contentLanguage", "English"),
@@ -83,7 +94,7 @@ Item {
   // that fingerprint still matches, so a cosmetic change like the bar display
   // mode costs nothing. Debounced because shell.json is rewritten once per
   // control and a language change writes two keys at once.
-  onSettingsChanged: settingsSettle.restart()
+  onSettingsChanged: if (ready) settingsSettle.restart()
 
   Timer {
     id: settingsSettle
@@ -92,12 +103,22 @@ Item {
   }
 
   function tick() {
+    if (!ready) return
     if (!Model.rotationDue(current.chosenAt, current.intervalHours || setting("rotationHours", 6), Date.now())) return
     rotate(false)
   }
 
+  // A forced rotation that lands while the helper is still running is queued
+  // rather than dropped: a person who pressed "show another" gets another,
+  // even if the settings-change repick happened to be in flight.
+  property bool pendingForce: false
+
   function rotate(force) {
-    if (busy) return
+    if (!ready) return
+    if (busy) {
+      if (force === true) pendingForce = true
+      return
+    }
     busy = true
     pickProc.command = ["/bin/bash"].concat(Model.pickArgs(helperPath, settings, force === true, false))
     pickProc.running = true
@@ -130,6 +151,10 @@ Item {
     onExited: function(code) {
       root.busy = false
       if (code !== 0 && !root.hasContent) stateFile.reload()
+      if (root.pendingForce) {
+        root.pendingForce = false
+        Qt.callLater(function() { root.rotate(true) })
+      }
     }
   }
 
@@ -150,11 +175,15 @@ Item {
     var next = Model.parseState(raw)
     if (!Model.hasContent(next)) return
     var changed = next.chosenAt !== root.current.chosenAt
+    var first = !root.primed
     root.current = next
-    if (changed) {
-      root.rotated()
-      root.notify()
-    }
+    root.primed = true
+    if (!changed || first) return
+    root.rotated()
+    // Backstop for the case primed cannot see: a second instance of this
+    // service, alive for a moment during a reload, adopting a file the first
+    // one just wrote. A rotation that already happened minutes ago is not news.
+    if (Date.now() - (next.chosenAt || 0) < 120000) root.notify()
   }
 
   FileView {
@@ -164,7 +193,12 @@ Item {
     printErrors: false
     onFileChanged: reload()
     onLoaded: root.adopt(text())
-    onLoadFailed: root.rotate(false)
+    onLoadFailed: {
+      // No state file yet: pick the first passage, but stay unprimed so the
+      // very first one arrives quietly.
+      root.primed = false
+      root.rotate(false)
+    }
   }
 
   FileView {
@@ -273,7 +307,14 @@ Item {
   IpcHandler {
     target: "io.github.keyaypi.daily-deen"
 
-    function status(): string { return JSON.stringify(root.current) }
+    // The pick, plus the few flags worth seeing when something looks wrong.
+    function status(): string {
+      var out = JSON.parse(JSON.stringify(root.current))
+      out.serviceReady = root.ready
+      out.servicePrimed = root.primed
+      out.serviceBusy = root.busy
+      return JSON.stringify(out)
+    }
     function next(): string { root.rotate(true); return "ok" }
     function refresh(): string { root.rotate(false); return "ok" }
     function sync(): string { root.sync(); return "ok" }
