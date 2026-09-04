@@ -15,7 +15,7 @@ import "I18n.js" as I18n
 // notifications.
 BarWidget {
   id: root
-  moduleName: "io.github.keyaypi.daily-deen"
+  moduleName: "io.github.kusumaindraputra.daily-deen"
 
   readonly property string glyph: "\u{F405}"
 

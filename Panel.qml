@@ -14,8 +14,8 @@ import "I18n.js" as I18n
 // one job beyond rendering is writing a chosen edition back to shell.json.
 Panel {
   id: root
-  moduleName: "io.github.keyaypi.daily-deen"
-  ipcTarget: "io.github.keyaypi.daily-deen"
+  moduleName: "io.github.kusumaindraputra.daily-deen"
+  ipcTarget: "io.github.kusumaindraputra.daily-deen"
   manageIpc: false
 
   property var anchorItem: null

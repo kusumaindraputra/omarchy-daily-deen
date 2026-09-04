@@ -16,7 +16,7 @@ Item {
   property var shell: null
   property var manifest: null
 
-  readonly property string pluginId: "io.github.keyaypi.daily-deen"
+  readonly property string pluginId: "io.github.kusumaindraputra.daily-deen"
 
   // Services are not handed `settings`; only bar widgets are. shellConfig is
   // reassigned wholesale whenever shell.json changes, so reading it here is a
@@ -305,7 +305,7 @@ Item {
   // `omarchy-shell shell toggle <id>`, which picks the focused monitor's
   // instance. A signal from a service would open the panel on every screen.
   IpcHandler {
-    target: "io.github.keyaypi.daily-deen"
+    target: "io.github.kusumaindraputra.daily-deen"
 
     // The pick, plus the few flags worth seeing when something looks wrong.
     function status(): string {

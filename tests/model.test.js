@@ -3,7 +3,7 @@ const assert = require("node:assert/strict")
 const Model = require("../Model.js")
 const Grades = require("../Grades.js")
 
-const ID = "io.github.keyaypi.daily-deen"
+const ID = "io.github.kusumaindraputra.daily-deen"
 
 const CATALOG = {
   quran: [

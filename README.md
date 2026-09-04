@@ -15,7 +15,7 @@ with a panel for the full text, translation, reference and grading.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/keyaypi/omarchy-daily-deen.git --enable
+omarchy plugin add https://github.com/kusumaindraputra/omarchy-daily-deen.git --enable
 ```
 
 Plugins land disabled so you can read the code first; `--enable` skips that. It puts
@@ -127,16 +127,16 @@ bin/deen-fetch status                        # what is on screen
 Over IPC:
 
 ```bash
-omarchy-shell io.github.keyaypi.daily-deen next     # rotate now
-omarchy-shell io.github.keyaypi.daily-deen status   # current pick as JSON
-omarchy-shell io.github.keyaypi.daily-deen sync     # re-download the chosen editions
-omarchy-shell shell toggle io.github.keyaypi.daily-deen   # open the panel
+omarchy-shell io.github.kusumaindraputra.daily-deen next     # rotate now
+omarchy-shell io.github.kusumaindraputra.daily-deen status   # current pick as JSON
+omarchy-shell io.github.kusumaindraputra.daily-deen sync     # re-download the chosen editions
+omarchy-shell shell toggle io.github.kusumaindraputra.daily-deen   # open the panel
 ```
 
 A Hyprland keybind, in `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + SHIFT + Q", "Daily ayah", "omarchy-shell shell toggle io.github.keyaypi.daily-deen")
+o.bind("SUPER + SHIFT + Q", "Daily ayah", "omarchy-shell shell toggle io.github.kusumaindraputra.daily-deen")
 ```
 
 ## Developing

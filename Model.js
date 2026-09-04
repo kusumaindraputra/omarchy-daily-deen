@@ -6,7 +6,7 @@
 // and deliberately no `.pragma library` — that would be a syntax error to node
 // and would also opt the file out of plugin hot reload.
 
-var PLUGIN_ID = "io.github.keyaypi.daily-deen"
+var PLUGIN_ID = "io.github.kusumaindraputra.daily-deen"
 
 // ------------------------------------------------------------------ settings
 
