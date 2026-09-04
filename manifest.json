@@ -68,7 +68,7 @@
         "min": 1, "max": 168, "step": 1, "defaultValue": 6 },
       { "key": "rotationMode", "type": "enum", "label": "Choice",
         "options": ["deterministic", "random"], "defaultValue": "deterministic",
-        "description": "Deterministic derives the pick from the clock and the settings, so every machine configured alike shows the same ayah. Random picks freely and avoids recent repeats." },
+        "description": "Deterministic derives the pick from the clock and the settings, so every machine configured alike shows the same ayah. Random picks freely and avoids recent repeats. Either way, refreshing by hand always chooses a new passage." },
 
       { "key": "notify", "type": "boolean", "label": "Notify when it rotates", "defaultValue": true },
       { "key": "barDisplay", "type": "enum", "label": "Show in the bar",

@@ -292,9 +292,21 @@ cmd_pick() {
       --hadith "$h" --hadith-arabic "$ha" --authority "$auth" \
       "${sync_flags[@]}" >/dev/null 2>&1 || true
 
-  local slot seed
+  # A scheduled deterministic pick is a pure function of the slot and the
+  # settings, which is what makes two machines configured alike agree on the
+  # passage. A forced one cannot be, and must not try: --force skipped the due
+  # check but left the seed alone, so inside one slot it re-derived the very
+  # same seed and the refresh button re-picked the passage already on screen.
+  #
+  # Drawing at random on a force rather than mixing the clock into the hash is
+  # deliberate: now_ms() has second resolution, so two presses inside one second
+  # would still have hashed to the same seed. Asking for a new passage is an
+  # explicit act; only the picks nobody asked for need to agree across machines.
+  local slot seed varied=0
   slot=$(( now / interval_ms ))
-  if [[ $mode == random ]]; then seed="$(rand31)"; else seed="$(hash31 "$fingerprint|$slot")"; fi
+  [[ $mode == random ]] && varied=1
+  (( force )) && varied=1
+  if (( varied )); then seed="$(rand31)"; else seed="$(hash31 "$fingerprint|$slot")"; fi
 
   local ayah_json="null" hadith_json="null" source="cache" fallback=false
 
@@ -309,7 +321,7 @@ cmd_pick() {
       local total idx tries=0
       total="$(jq '.quran | length' "$primary")"
       idx=$(( seed % total ))
-      if [[ $mode == random ]]; then
+      if (( varied )); then
         while (( tries < 20 )) && seen_has "ayah:$(jq -r --argjson i "$idx" '.quran[$i] | "\(.chapter):\(.verse)"' "$primary")"; do
           idx=$(( $(rand31) % total )); tries=$(( tries + 1 ))
         done
@@ -364,7 +376,7 @@ cmd_pick() {
         local pos num tries=0
         pos=$(( (seed / 7 + seed) % count ))
         num="$(jq -r --argjson i "$pos" '.[$i]' <<<"$numbers")"
-        if [[ $mode == random ]]; then
+        if (( varied )); then
           while (( tries < 20 )) && seen_has "hadith:$h:$num"; do
             pos=$(( $(rand31) % count )); num="$(jq -r --argjson i "$pos" '.[$i]' <<<"$numbers")"
             tries=$(( tries + 1 ))

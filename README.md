@@ -163,6 +163,7 @@ o.bind("SUPER + SHIFT + Q", "Daily ayah", "omarchy-shell shell toggle io.github.
 ```bash
 node --test "tests/*.test.js"    # Model.js, Grades.js, I18n.js
 ./tests/grades.test.sh           # the classifier against the real corpus
+./tests/pick.test.sh             # rotation and --force, on throwaway fixtures
 omarchy plugin validate .
 ./bin/dev-sync                   # copy into ~/.config/omarchy/plugins and reload
 ```
