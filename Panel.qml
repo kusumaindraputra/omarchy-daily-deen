@@ -37,15 +37,22 @@ Panel {
   readonly property var hadithMeta: service ? service.hadithMeta : null
   readonly property string locale: service ? service.locale : "en"
 
-  // The bar hands a panel its `settings` once, as a snapshot taken when the bar
-  // was built, and Bar.injectProps pushes that same snapshot back on every
-  // activeItemChanged — which is every time this panel opens. A setting written
-  // from here therefore showed until the panel was reopened and then reverted
-  // to the old value, while the service went on using the new one, because the
-  // service reads shellConfig live. So does this, for the same reason: the
-  // config is reassigned wholesale on every shell.json change, which makes it a
-  // binding rather than a copy. The pushed snapshot is only the fallback for a
-  // panel whose shell has not been injected yet.
+  // The bar hands a panel its `settings` as a copy and re-pushes it on every
+  // activeItemChanged, which is every time this panel opens. That copy was
+  // observed disagreeing with shell.json and with the service — the pickers
+  // offered English and A. J. Arberry while the ayah rendered in Indonesian —
+  // stale by exactly the most recent change, and only a shell restart cleared
+  // it. What put it out of step is not pinned down: an edit made to shell.json
+  // from outside does reach it. Reading shellConfig removes the question, since
+  // it is reassigned wholesale on every change and so is a binding rather than
+  // a copy; Service.qml reads it for its own reasons and says so.
+  //
+  // persist() has to read from here too, and that part is not guesswork:
+  // shell.qml's updateEntryInline builds the entry it writes out of nothing but
+  // the object handed to it, so an entry assembled from a stale copy would put
+  // every key it did not know about back to what it used to be.
+  //
+  // The pushed copy stays as the fallback for a panel with no shell yet.
   readonly property var liveSettings: (bar && bar.shell)
     ? Model.entrySettings(bar.shell.shellConfig, moduleName)
     : settings
