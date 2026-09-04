@@ -36,11 +36,28 @@ Panel {
   readonly property var catalog: service ? service.catalog : null
   readonly property var hadithMeta: service ? service.hadithMeta : null
   readonly property string locale: service ? service.locale : "en"
+
+  // The bar hands a panel its `settings` once, as a snapshot taken when the bar
+  // was built, and Bar.injectProps pushes that same snapshot back on every
+  // activeItemChanged — which is every time this panel opens. A setting written
+  // from here therefore showed until the panel was reopened and then reverted
+  // to the old value, while the service went on using the new one, because the
+  // service reads shellConfig live. So does this, for the same reason: the
+  // config is reassigned wholesale on every shell.json change, which makes it a
+  // binding rather than a copy. The pushed snapshot is only the fallback for a
+  // panel whose shell has not been injected yet.
+  readonly property var liveSettings: (bar && bar.shell)
+    ? Model.entrySettings(bar.shell.shellConfig, moduleName)
+    : settings
+  function cfg(name, fallback) {
+    var value = liveSettings ? liveSettings[name] : undefined
+    return value === undefined || value === null ? fallback : value
+  }
   function t(key) { return I18n.t(locale, key) }
 
   readonly property var ayah: current ? current.ayah : null
   readonly property var hadith: current ? current.hadith : null
-  readonly property bool showArabic: setting("showArabic", true) === true
+  readonly property bool showArabic: cfg("showArabic", true) === true
 
   // Resolved once rather than per Text: Qt.fontFamilies() walks the whole
   // system font list, and there is one of these Texts per passage.
@@ -52,7 +69,7 @@ Panel {
 
   readonly property int remainingMs: Math.max(0,
     Model.nextRotationAt(current ? current.chosenAt : 0,
-                         current ? (current.intervalHours || setting("rotationHours", 6)) : 6) - nowTick)
+                         current ? (current.intervalHours || cfg("rotationHours", 6)) : 6) - nowTick)
 
   // ---- lifecycle
 
@@ -100,7 +117,7 @@ Panel {
   // is what keeps this from looping.
   function persist(values) {
     var entry = { id: root.moduleName }
-    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var existing in root.liveSettings) if (existing !== "id") entry[existing] = root.liveSettings[existing]
     for (var key in values) {
       if (values[key] === undefined || values[key] === null || values[key] === "") delete entry[key]
       else entry[key] = values[key]
@@ -136,7 +153,7 @@ Panel {
   }
 
   function setHadithBook(book) {
-    var editions = Model.hadithEditionOptions(root.catalog, book, setting("hadithLanguage", "English"))
+    var editions = Model.hadithEditionOptions(root.catalog, book, cfg("hadithLanguage", "English"))
     var edition = editions.length > 0 ? editions[0].value : ""
     persist({
       hadithEdition: edition,
@@ -148,7 +165,7 @@ Panel {
     persist({
       showArabic: value,
       hadithArabicEdition: value
-        ? Model.arabicCounterpart(root.catalog, setting("hadithEdition", "eng-abudawud"))
+        ? Model.arabicCounterpart(root.catalog, cfg("hadithEdition", "eng-abudawud"))
         : ""
     })
   }
@@ -167,13 +184,13 @@ Panel {
   readonly property var quranLanguages: Model.languageOptions(catalog, "quran")
   readonly property var hadithLanguages: Model.languageOptions(catalog, "hadith")
   readonly property var arabicScripts: Model.quranEditionOptions(catalog, "Arabic")
-  readonly property var translations: Model.quranEditionOptions(catalog, setting("contentLanguage", "English"))
-  readonly property var hadithBooks: Model.hadithBookOptions(catalog, setting("hadithLanguage", "English"))
+  readonly property var translations: Model.quranEditionOptions(catalog, cfg("contentLanguage", "English"))
+  readonly property var hadithBooks: Model.hadithBookOptions(catalog, cfg("hadithLanguage", "English"))
   readonly property string currentBook: {
-    var info = Model.editionInfo(catalog, "hadith", setting("hadithEdition", "eng-abudawud"))
+    var info = Model.editionInfo(catalog, "hadith", cfg("hadithEdition", "eng-abudawud"))
     return info ? info.book : ""
   }
-  readonly property var hadithEditions: Model.hadithEditionOptions(catalog, currentBook, setting("hadithLanguage", "English"))
+  readonly property var hadithEditions: Model.hadithEditionOptions(catalog, currentBook, cfg("hadithLanguage", "English"))
 
   readonly property var graderOptions: {
     var out = [{ value: "", label: t("strictest"), description: "" }]
@@ -192,7 +209,7 @@ Panel {
   // "3,512 sahih to draw from" — the count the current filter actually leaves.
   readonly property string poolNote: {
     if (!hadithMeta || !hadithMeta.counts) return ""
-    var filter = setting("gradeFilter", "sahih-hasan")
+    var filter = cfg("gradeFilter", "sahih-hasan")
     var wanted = filter === "any" ? Grades.ORDER
       : filter === "sahih" ? ["sahih"]
       : filter === "daif" ? ["daif"] : ["sahih", "hasan"]
@@ -498,7 +515,7 @@ Panel {
               label: root.t("contentLanguage")
               placeholderText: root.t("search")
               options: root.quranLanguages
-              value: root.setting("contentLanguage", "English")
+              value: root.cfg("contentLanguage", "English")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.setContentLanguage(v) }
@@ -509,7 +526,7 @@ Panel {
               label: root.t("quranTranslation")
               placeholderText: root.t("search")
               options: root.translations
-              value: root.setting("quranTranslationEdition", "")
+              value: root.cfg("quranTranslationEdition", "")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ quranTranslationEdition: v }) }
@@ -521,7 +538,7 @@ Panel {
               label: root.t("quranEdition")
               placeholderText: root.t("search")
               options: root.arabicScripts
-              value: root.setting("quranEdition", "ara-quranuthmanihaf")
+              value: root.cfg("quranEdition", "ara-quranuthmanihaf")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ quranEdition: v }) }
@@ -532,7 +549,7 @@ Panel {
               label: root.t("hadithLanguage")
               placeholderText: root.t("search")
               options: root.hadithLanguages
-              value: root.setting("hadithLanguage", "English")
+              value: root.cfg("hadithLanguage", "English")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.setHadithLanguage(v) }
@@ -557,7 +574,7 @@ Panel {
               label: root.t("hadithEdition")
               placeholderText: root.t("search")
               options: root.hadithEditions
-              value: root.setting("hadithEdition", "eng-abudawud")
+              value: root.cfg("hadithEdition", "eng-abudawud")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ hadithEdition: v }) }
@@ -567,7 +584,7 @@ Panel {
               width: parent.width
               label: root.t("gradeFilter") + (root.poolNote ? "   " + root.poolNote : "")
               options: root.gradeFilterOptions
-              value: root.setting("gradeFilter", "sahih-hasan")
+              value: root.cfg("gradeFilter", "sahih-hasan")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ gradeFilter: v }) }
@@ -581,7 +598,7 @@ Panel {
               label: root.t("gradeAuthority")
               placeholderText: root.t("search")
               options: root.graderOptions
-              value: root.setting("gradeAuthority", "Al-Albani")
+              value: root.cfg("gradeAuthority", "Al-Albani")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ gradeAuthority: v }) }
@@ -592,7 +609,7 @@ Panel {
               from: 1
               to: 168
               stepSize: 1
-              value: Number(root.setting("rotationHours", 6))
+              value: Number(root.cfg("rotationHours", 6))
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onModified: function(v) { root.pendingHours = v; hoursDebounce.restart() }
@@ -605,7 +622,7 @@ Panel {
                 { value: "deterministic", label: root.t("deterministic") },
                 { value: "random", label: root.t("random") }
               ]
-              value: root.setting("rotationMode", "deterministic")
+              value: root.cfg("rotationMode", "deterministic")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ rotationMode: v }) }
@@ -619,7 +636,7 @@ Panel {
                 { value: "glyph-reference", label: root.t("barReference") },
                 { value: "glyph-snippet", label: root.t("barSnippet") }
               ]
-              value: root.setting("barDisplay", "glyph")
+              value: root.cfg("barDisplay", "glyph")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ barDisplay: v }) }
@@ -630,7 +647,7 @@ Panel {
               label: root.t("uiLanguage")
               placeholderText: root.t("search")
               options: I18n.localeOptions(root.locale)
-              value: root.setting("uiLanguage", "auto")
+              value: root.cfg("uiLanguage", "auto")
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ uiLanguage: v }) }
@@ -648,28 +665,28 @@ Panel {
             Toggle {
               width: parent.width
               label: root.t("showAyah")
-              checked: root.setting("showAyah", true) === true
+              checked: root.cfg("showAyah", true) === true
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
-              onClicked: root.persist({ showAyah: !(root.setting("showAyah", true) === true) })
+              onClicked: root.persist({ showAyah: !(root.cfg("showAyah", true) === true) })
             }
 
             Toggle {
               width: parent.width
               label: root.t("showHadith")
-              checked: root.setting("showHadith", true) === true
+              checked: root.cfg("showHadith", true) === true
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
-              onClicked: root.persist({ showHadith: !(root.setting("showHadith", true) === true) })
+              onClicked: root.persist({ showHadith: !(root.cfg("showHadith", true) === true) })
             }
 
             Toggle {
               width: parent.width
               label: root.t("notify")
-              checked: root.setting("notify", true) === true
+              checked: root.cfg("notify", true) === true
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
-              onClicked: root.persist({ notify: !(root.setting("notify", true) === true) })
+              onClicked: root.persist({ notify: !(root.cfg("notify", true) === true) })
             }
           }
         }
