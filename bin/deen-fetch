@@ -34,7 +34,36 @@ SEEN_MAX=60
 
 OFFLINE=0
 
+# Nothing upstream promises a size. The largest edition in the corpus is about
+# 6.6 MB, so these leave room to grow while still bounding what a hostile or
+# broken CDN response can cost: curl is told to refuse a declared length over
+# the cap, and the delivered bytes are measured again before the file is
+# accepted, because a chunked or compressed response need not declare one.
+MAX_EDITION_BYTES=33554432   # 32 MiB
+MAX_CATALOG_BYTES=8388608    # 8 MiB
+
+# Edition slugs arrive inside the downloaded catalogs, and each one is pasted
+# into both a URL and a cache path. A slug carrying a slash or a .. would put a
+# CDN response somewhere else under the user's account entirely.
+SLUG_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+
 die() { echo "deen-fetch: $*" >&2; exit 1; }
+
+valid_slug() {
+  local s="${1:-}"
+  [[ -n $s ]] || return 1
+  [[ $s == *..* ]] && return 1
+  [[ $s =~ $SLUG_RE ]]
+}
+
+# An empty slug means "not configured", which is a legitimate setting. A
+# non-empty one that fails the pattern is refused outright rather than
+# sanitised: there is no reading of it that we want to act on.
+require_slug() {
+  local s="${1:-}" what="$2"
+  [[ -n $s ]] || return 0
+  valid_slug "$s" || die "refusing $what slug: $s"
+}
 note() { [[ -n ${DEEN_DEBUG:-} ]] && echo "deen-fetch: $*" >&2 || true; }
 now_ms() { echo $(( $(date +%s) * 1000 )); }
 
@@ -50,8 +79,22 @@ write_atomic() {
 
 # Conditional GET. The @1 tag is mutable upstream, so an ETag is how we notice a
 # new edition without re-downloading megabytes on every sync.
+# Accept a downloaded temp file only if it is within the cap. The producer-side
+# --max-filesize below covers a response that declares its length; this covers
+# the one that does not.
+accept_within() {
+  local tmp="$1" dest="$2" max="$3" size
+  size="$(wc -c < "$tmp" 2>/dev/null || echo 0)"
+  if (( size > max )); then
+    rm -f "$tmp"
+    note "discarding oversized response for $dest ($size > $max bytes)"
+    return 1
+  fi
+  mv -f "$tmp" "$dest"
+}
+
 fetch() {
-  local url="$1" dest="$2" force="${3:-0}" etag_file
+  local url="$1" dest="$2" force="${3:-0}" max="${4:-$MAX_EDITION_BYTES}" etag_file
   etag_file="$CACHE_DIR/etag/$(echo -n "$url" | md5sum | cut -d' ' -f1)"
   mkdir -p "$CACHE_DIR/etag" "$(dirname "$dest")"
 
@@ -62,18 +105,22 @@ fetch() {
   if (( ! force )) && [[ -s $dest ]] && [[ -s $etag_file ]]; then
     local tmp; tmp="$(mktemp)"
     if curl -fsS --compressed --max-time 60 --retry 2 --retry-delay 1 \
+         --max-filesize "$max" \
          --etag-compare "$etag_file" --etag-save "$etag_file" \
          -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null | grep -q '^304$'; then
       rm -f "$tmp"; return 0
     fi
-    [[ -s $tmp ]] && { mv -f "$tmp" "$dest"; return 0; }
+    [[ -s $tmp ]] && { accept_within "$tmp" "$dest" "$max" && return 0; return 1; }
     rm -f "$tmp"; return 0
   fi
 
   local tmp; tmp="$(mktemp)"
   if curl -fsS --compressed --max-time 120 --retry 2 --retry-delay 1 \
+       --max-filesize "$max" \
        --etag-save "$etag_file" -o "$tmp" "$url"; then
-    mv -f "$tmp" "$dest"; return 0
+    accept_within "$tmp" "$dest" "$max" && return 0
+    [[ -s $dest ]] && return 0
+    return 1
   fi
   rm -f "$tmp"
   [[ -s $dest ]] && return 0
@@ -91,18 +138,21 @@ cmd_catalog() {
   h="$CACHE_DIR/raw/hadith-editions.json"
   info="$CACHE_DIR/raw/quran-info.json"
 
-  fetch "$QURAN_API/editions.min.json"  "$q"    "$force" || die "cannot reach quran editions and no cache"
-  fetch "$HADITH_API/editions.json"     "$h"    "$force" || die "cannot reach hadith editions and no cache"
-  fetch "$QURAN_API/info.min.json"      "$info" "$force" || die "cannot reach quran info and no cache"
+  fetch "$QURAN_API/editions.min.json"  "$q"    "$force" "$MAX_CATALOG_BYTES" || die "cannot reach quran editions and no cache"
+  fetch "$HADITH_API/editions.json"     "$h"    "$force" "$MAX_CATALOG_BYTES" || die "cannot reach hadith editions and no cache"
+  fetch "$QURAN_API/info.min.json"      "$info" "$force" "$MAX_CATALOG_BYTES" || die "cannot reach quran info and no cache"
 
   # The top-level keys are underscore-form (eng_abdelhaleem); the URL slug lives
   # in .name (eng-abdelhaleem). Reading keys[] here would 404 every request.
   #
   # The -la / -lad suffixes are Latin transliterations rather than translations,
   # so they are flagged and kept out of the translation picker by default.
-  jq -n \
+  # Slugs are dropped here as well as checked at the point of use, so a hostile
+  # entry never reaches the cached catalog that the picker reads back.
+  local built
+  built="$(jq -n \
     --slurpfile q "$q" --slurpfile h "$h" --slurpfile info "$info" \
-    --argjson now "$(now_ms)" --arg version "$VERSION" '
+    --argjson now "$(now_ms)" --arg version "$VERSION" --arg slugre "$SLUG_RE" '
     {
       version: 1,
       fetchedAt: $now,
@@ -112,20 +162,38 @@ cmd_catalog() {
           direction: (.direction // "ltr"),
           latin: (.name | test("-lad?[0-9]*$")),
           comments: (.comments // ""), source: (.source // "")
-        }) | sort_by(.language, .author) ),
+        }) | map(select((.slug | type) == "string"
+                        and (.slug | test($slugre))
+                        and (.slug | contains("..") | not)))
+          | sort_by(.language, .author) ),
       hadith: ( $h[0] | to_entries | map(.key as $book | .value.collection[] | {
           slug: .name, book: $book, language: .language,
           direction: (.direction // "ltr"),
           hasSections: (.has_sections // false),
           comments: (.comments // "")
-        }) | sort_by(.language, .book) ),
+        }) | map(select((.slug | type) == "string"
+                        and (.slug | test($slugre))
+                        and (.slug | contains("..") | not)))
+          | sort_by(.language, .book) ),
       books: ( $h[0] | to_entries | map({ key: .key, value: { name: .value.name } }) | from_entries ),
       surahs: ( $info[0].chapters | map({
           n: .chapter, name: .name, english: .englishname,
           arabic: .arabicname, revelation: .revelation,
           ayahs: (.verses | length)
         }) )
-    }' | write_atomic "$CATALOG"
+    }')" || die "cannot parse the edition lists"
+
+  # A response can parse and still be useless. Caching an empty or truncated
+  # catalog would break every later pick until the cache is cleared by hand, so
+  # it is refused here and the previous catalog is left in place.
+  local nq nh ns
+  nq="$(jq '.quran  | length' <<<"$built")"
+  nh="$(jq '.hadith | length' <<<"$built")"
+  ns="$(jq '.surahs | length' <<<"$built")"
+  (( nq > 0 && nh > 0 )) || die "catalog carries no usable editions (quran=$nq hadith=$nh)"
+  (( ns == 114 )) || die "catalog lists $ns surahs, expected 114"
+
+  printf '%s' "$built" | write_atomic "$CATALOG"
 
   jq -c '{quran: (.quran|length), hadith: (.hadith|length), books: (.books|length), surahs: (.surahs|length)}' "$CATALOG"
 }
@@ -145,6 +213,7 @@ book_of() {
 sync_quran() {
   local slug="$1" force="${2:-0}"
   [[ -n $slug ]] || return 0
+  valid_slug "$slug" || { note "refusing quran slug $slug"; return 1; }
   fetch "$QURAN_API/editions/$slug.min.json" "$(quran_path "$slug")" "$force" \
     || { note "quran edition $slug unavailable"; return 1; }
 }
@@ -157,6 +226,7 @@ sync_quran() {
 sync_hadith() {
   local slug="$1" force="${2:-0}" authority="${3:-}" book path
   [[ -n $slug ]] || return 0
+  valid_slug "$slug" || { note "refusing hadith slug $slug"; return 1; }
   path="$(hadith_path "$slug")"
   fetch "$HADITH_API/editions/$slug.min.json" "$path" "$force" \
     || { note "hadith edition $slug unavailable"; return 1; }
@@ -202,6 +272,10 @@ cmd_sync() {
       *) die "unknown flag $1";;
     esac; shift
   done
+  require_slug "$q"  "quran"
+  require_slug "$qt" "quran translation"
+  require_slug "$h"  "hadith"
+  require_slug "$ha" "hadith arabic"
   [[ -s $CATALOG ]] || cmd_catalog >/dev/null
   sync_quran  "$q"  "$force" || true
   sync_quran  "$qt" "$force" || true
@@ -263,6 +337,10 @@ cmd_pick() {
     esac; shift
   done
   [[ $interval =~ ^[0-9]+$ ]] && (( interval >= 1 )) || interval=6
+  require_slug "$q"  "quran"
+  require_slug "$qt" "quran translation"
+  require_slug "$h"  "hadith"
+  require_slug "$ha" "hadith arabic"
 
   local fingerprint prev_fp prev_at now interval_ms
   fingerprint="$(hash31 "$q|$qt|$h|$ha|$filter|$auth|$interval|$mode|$show_ayah|$show_hadith")"

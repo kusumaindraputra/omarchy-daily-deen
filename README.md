@@ -54,6 +54,13 @@ jsDelivr, no API key, no rate limit. Their language coverage is why they were ch
 over quran.com or sunnah.com, and being static files is why the offline mode is
 simply a matter of keeping a copy.
 
+Neither is treated as trustworthy. Edition slugs come out of those catalogs and
+end up in both a URL and a cache path, so they are matched against
+`^[A-Za-z0-9][A-Za-z0-9._-]*$` and refused otherwise — once when the catalog is
+built and again wherever one is used. Every download is capped, by `--max-filesize`
+and again by measuring what actually arrived, and a catalog that parses but
+carries no editions or the wrong number of surahs is rejected rather than cached.
+
 ## How gradings are read
 
 Graders write free text, not an enum: `Sahih`, `Hasan Sahih`, `Sahih Isnaad`,
@@ -164,6 +171,7 @@ o.bind("SUPER + SHIFT + Q", "Daily ayah", "omarchy-shell shell toggle io.github.
 node --test "tests/*.test.js"    # Model.js, Grades.js, I18n.js
 ./tests/grades.test.sh           # the classifier against the real corpus
 ./tests/pick.test.sh             # rotation and --force, on throwaway fixtures
+./tests/inputs.test.sh           # what it refuses from the CDN
 omarchy plugin validate .
 ./bin/dev-sync                   # copy into ~/.config/omarchy/plugins and reload
 ```
