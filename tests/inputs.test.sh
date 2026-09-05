@@ -71,26 +71,82 @@ else
   fi
 fi
 
-# --- the download cap is wired to every fetch -------------------------------
-if grep -q 'curl' bin/deen-fetch && ! grep -q -- '--max-filesize' bin/deen-fetch; then
-  bad "curl is called without --max-filesize"
+# --- the size cap actually refuses bytes ------------------------------------
+# accept_within is what stands between a response and the cache, so drive it
+# directly rather than asserting that the source mentions it.
+( eval "$(sed -n '/^accept_within()/,/^}/p' bin/deen-fetch)"
+  note() { :; }
+  big="$TMP/big"; dst="$TMP/dest-big"
+  head -c 5000 /dev/zero > "$big"
+  if accept_within "$big" "$dst" 1000 2>/dev/null; then exit 1; fi
+  [[ -e $dst ]] && exit 2
+  [[ -e $big ]] && exit 3
+  small="$TMP/small"; dst2="$TMP/dest-small"
+  head -c 500 /dev/zero > "$small"
+  accept_within "$small" "$dst2" 1000 || exit 4
+  [[ -s $dst2 ]] || exit 5
+  exit 0 )
+case $? in
+  0) ok "an oversized response is discarded and an in-cap one accepted" ;;
+  1) bad "an oversized response was accepted" ;;
+  2) bad "an oversized response was written to its destination" ;;
+  3) bad "the oversized temp file was left behind" ;;
+  *) bad "an in-cap response was rejected or not written" ;;
+esac
+
+# Every curl call has to declare the cap, not just one of them.
+calls="$(grep -c 'curl -fsS' bin/deen-fetch)"
+caps="$(grep -c -- '--max-filesize "\$max"' bin/deen-fetch)"
+if (( caps == calls )); then
+  ok "all $calls curl calls declare --max-filesize"
 else
-  ok "curl declares a producer-side size cap"
+  bad "$calls curl calls but $caps declare --max-filesize"
 fi
-missing="$(grep -n 'curl -fsS' bin/deen-fetch | wc -l)"
-capped="$(grep -c 'max-filesize' bin/deen-fetch)"
-if (( capped < missing )); then
-  bad "$missing curl calls but only $capped size caps"
+
+# --- a hostile slug never reaches the cached catalog ------------------------
+# Built offline from local raw files, so this needs no network: --offline makes
+# fetch serve what is already on disk.
+CAT="$TMP/cat"; CD="$CAT/c/omarchy-daily-deen"; mkdir -p "$CD/raw"
+jq -n '{"eng_good":{name:"eng-good",language:"English",author:"Good",direction:"ltr"},
+        "evil":{name:"../../../pwned",language:"English",author:"Evil",direction:"ltr"},
+        "dots":{name:"a..b",language:"English",author:"Dots",direction:"ltr"}}' \
+  > "$CD/raw/quran-editions.json"
+jq -n '{"tirmidhi":{name:"Jami",collection:[{name:"eng-tirmidhi",language:"English",has_sections:true},
+                                            {name:"../escape",language:"English",has_sections:true}]}}' \
+  > "$CD/raw/hadith-editions.json"
+jq -n '{chapters:[range(1;115)|{chapter:.,name:"S\(.)",englishname:"S\(.)",arabicname:"x",revelation:"Meccan",verses:[1,2,3]}]}' \
+  > "$CD/raw/quran-info.json"
+XDG_CACHE_HOME="$CAT/c" XDG_STATE_HOME="$CAT/s" \
+  ./bin/deen-fetch pick --offline --no-hadith --quran eng-good >/dev/null 2>&1
+if [[ -s $CD/catalog.json ]]; then
+  kept="$(jq -c '[.quran[].slug]+[.hadith[].slug]|sort' "$CD/catalog.json")"
+  if [[ $kept == '["eng-good","eng-tirmidhi"]' ]]; then
+    ok "the catalog keeps only well-formed slugs ($kept)"
+  else
+    bad "the catalog kept something it should not: $kept"
+  fi
 else
-  ok "every curl call carries a size cap ($capped for $missing calls)"
+  bad "no catalog was built from the local raw files"
 fi
-# A declared length is not the only way bytes arrive, so the delivered file is
-# measured too.
-if grep -q 'accept_within' bin/deen-fetch; then
-  ok "delivered bytes are measured before a file is accepted"
+
+# --- a catalog that parses but carries nothing is refused -------------------
+EMP="$TMP/empty"; ED="$EMP/c/omarchy-daily-deen"; mkdir -p "$ED/raw"
+jq -n '{}' > "$ED/raw/quran-editions.json"
+jq -n '{}' > "$ED/raw/hadith-editions.json"
+jq -n '{chapters:[]}' > "$ED/raw/quran-info.json"
+# --offline again: without it fetch would go and get the real editions, quietly
+# replacing the bait and testing nothing.
+XDG_CACHE_HOME="$EMP/c" XDG_STATE_HOME="$EMP/s" \
+  ./bin/deen-fetch pick --offline --no-hadith --quran eng-good >/dev/null 2>&1
+# The message itself is not asserted: cmd_pick swallows a failing sync on
+# purpose, so that a pick still serves what is cached. What matters is that
+# nothing was written.
+if [[ -e $ED/catalog.json ]]; then
+  bad "an empty catalog was cached anyway"
 else
-  bad "nothing re-checks the size of what actually arrived"
+  ok "an empty catalog is refused rather than cached"
 fi
+unset out
 
 if (( fail )); then printf '\ninputs: %s failed\n' "$fail"; exit 1; fi
 printf '\ninputs: all checks passed\n'
