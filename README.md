@@ -60,6 +60,13 @@ end up in both a URL and a cache path, so they are matched against
 built and again wherever one is used. A catalog that parses but carries no
 editions, or the wrong number of surahs, is rejected rather than cached.
 
+Every response is checked against the shape it is supposed to have before it is
+allowed to replace what is cached — a Qur'an edition needs a non-empty `.quran`
+array, a hadith edition a non-empty `.hadiths`, the surah list exactly 114 —
+because a body that parses is not yet the document that was asked for, and the
+difference otherwise surfaces later as a division by zero or a zero-byte index.
+`write_atomic` refuses an empty payload for the same reason.
+
 Downloads are capped **while they arrive**, not once they have landed. A chunked
 response declares no length, so waiting for `curl` to finish and then measuring
 the file is waiting until it is already on the disk. The body is piped through

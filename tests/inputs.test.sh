@@ -217,5 +217,85 @@ else
 fi
 unset out
 
+# --- a response that parses is not yet the document we asked for ------------
+# The first review asked for schema and cardinality checks. They were added for
+# the catalog but not for the editions, and the gap showed up as an arithmetic
+# error and a zero-byte index rather than as a download problem.
+SHAPE="$TMP/shape"; SD="$SHAPE/c/omarchy-daily-deen"; mkdir -p "$SD/quran" "$SD/hadith" "$SD/index"
+jq -n '{version:1,fetchedAt:0,
+        quran:[{slug:"x-ed",language:"E",author:"A",direction:"ltr",latin:false,comments:"",source:""}],
+        hadith:[{slug:"h-ed",book:"b",language:"E",direction:"ltr",hasSections:false,comments:""}],
+        books:{b:{name:"B"}},surahs:[]}' > "$SD/catalog.json"
+echo '{"notquran":[]}'            > "$SD/quran/x-ed.json"
+echo '{"hadiths":"not-an-array"}' > "$SD/hadith/h-ed.json"
+
+# DEEN_DEBUG, because the refusal is reported through note(), which is quiet
+# without it. The behaviour under test is the same either way.
+out="$(XDG_CACHE_HOME="$SHAPE/c" XDG_STATE_HOME="$SHAPE/s" DEEN_DEBUG=1 \
+       ./bin/deen-fetch pick --no-sync --offline --no-hadith --quran x-ed 2>&1)"
+if grep -q 'division by 0' <<<"$out"; then
+  bad "a quran edition with no .quran array still divides by zero"
+elif grep -q 'unusable' <<<"$out"; then
+  ok "a quran edition with no .quran array is refused, not divided by"
+else
+  bad "a malformed quran edition produced: $out"
+fi
+
+XDG_CACHE_HOME="$SHAPE/c" XDG_STATE_HOME="$SHAPE/s" \
+  ./bin/deen-fetch sync --offline --hadith h-ed >/dev/null 2>&1
+if [[ -n "$(ls -A "$SD/index" 2>/dev/null)" ]]; then
+  bad "a hadith edition with a bad .hadiths still cached an index"
+else
+  ok "a hadith edition with a bad .hadiths caches no index"
+fi
+
+# write_atomic is the last thing between a failed jq and the cache.
+( eval "$(sed -n '/^write_atomic()/,/^}/p' bin/deen-fetch)"
+  note() { :; }
+  printf '' | write_atomic "$TMP/should-not-exist" && exit 1
+  [[ -e $TMP/should-not-exist ]] && exit 2
+  printf 'x' | write_atomic "$TMP/should-exist" || exit 3
+  [[ -s $TMP/should-exist ]] || exit 4
+  exit 0 )
+case $? in
+  0) ok "write_atomic refuses an empty payload and still writes a real one" ;;
+  1) bad "write_atomic accepted an empty payload" ;;
+  2) bad "write_atomic created a file from an empty payload" ;;
+  *) bad "write_atomic rejected a payload it should have written" ;;
+esac
+
+# The shape check has to run before the cached copy is replaced.
+PORT3="$TMP/port3"
+python3 - "$PORT3" <<'SRV' &
+import socket, sys
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", 0)); srv.listen(1)
+open(sys.argv[1], "w").write(str(srv.getsockname()[1]))
+conn, _ = srv.accept()
+while b"\r\n\r\n" not in conn.recv(65536):
+    pass
+body = b'{"nope":[1,2,3]}'
+conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+conn.close(); srv.close()
+SRV
+SRV3=$!
+for _ in $(seq 1 100); do [[ -s $PORT3 ]] && break; sleep 0.1; done
+KEEP="$TMP/keep.json"; printf '{"quran":[{"chapter":1,"verse":1,"text":"old"}]}' > "$KEEP"
+( eval "$(sed -n '/^bounded_get()/,/^}/p' bin/deen-fetch)"
+  eval "$(sed -n '/^fetch()/,/^}/p' bin/deen-fetch)"
+  note() { :; }
+  CACHE_DIR="$TMP/fetchcache"; MAX_EDITION_BYTES=100000; OFFLINE=0
+  fetch "http://127.0.0.1:$(cat "$PORT3")/x.json" "$KEEP" 1 100000 \
+        '(.quran | type) == "array" and (.quran | length) > 0'
+  exit $? )
+rc3=$?
+wait "$SRV3" 2>/dev/null
+if [[ "$(jq -r '.quran[0].text' "$KEEP" 2>/dev/null)" == "old" ]]; then
+  ok "a wrong-shaped body leaves the cached copy alone (exit $rc3)"
+else
+  bad "a wrong-shaped body replaced the cached copy"
+fi
+
 if (( fail )); then printf '\ninputs: %s failed\n' "$fail"; exit 1; fi
 printf '\ninputs: all checks passed\n'

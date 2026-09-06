@@ -47,6 +47,15 @@ MAX_CATALOG_BYTES=8388608    # 8 MiB
 # CDN response somewhere else under the user's account entirely.
 SLUG_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
 
+# What each endpoint has to look like before its body is allowed near the cache.
+# "It parsed" is not the same as "it is the document we asked for", and the
+# difference shows up later as a division by zero or an empty index rather than
+# as a download problem.
+SHAPE_EDITIONS='(type == "object") and (keys | length) > 0'
+SHAPE_INFO='(.chapters | type) == "array" and (.chapters | length) == 114'
+SHAPE_QURAN='(.quran | type) == "array" and (.quran | length) > 0'
+SHAPE_HADITH='(.hadiths | type) == "array" and (.hadiths | length) > 0'
+
 die() { echo "deen-fetch: $*" >&2; exit 1; }
 
 valid_slug() {
@@ -74,6 +83,14 @@ write_atomic() {
   mkdir -p "$(dirname "$dest")"
   tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").XXXXXX")"
   cat > "$tmp"
+  # Nothing here ever has a legitimate empty result, so an empty one means the
+  # jq upstream of us died. Writing it would cache a zero-byte file that later
+  # reads treat as a document.
+  if [[ ! -s $tmp ]]; then
+    rm -f "$tmp"
+    note "refusing to write an empty $dest"
+    return 1
+  fi
   mv -f "$tmp" "$dest"
 }
 
@@ -126,8 +143,11 @@ bounded_get() {
   return 0
 }
 
+# The optional 5th argument is a jq filter the body has to satisfy before it is
+# allowed to replace what is cached. A response that parses is not yet the
+# document we asked for, and the cheapest moment to say so is before the move.
 fetch() {
-  local url="$1" dest="$2" force="${3:-0}" max="${4:-$MAX_EDITION_BYTES}" etag_file
+  local url="$1" dest="$2" force="${3:-0}" max="${4:-$MAX_EDITION_BYTES}" check="${5:-}" etag_file
   etag_file="$CACHE_DIR/etag/$(echo -n "$url" | md5sum | cut -d' ' -f1)"
   mkdir -p "$CACHE_DIR/etag" "$(dirname "$dest")"
 
@@ -149,7 +169,17 @@ fetch() {
     # An empty body is how a 304 arrives, and a zero-byte 200 is no use to us
     # either, so both mean: keep what is cached. That is why -w '%{http_code}'
     # is gone — it cannot share stdout with the body.
-    if [[ -s $tmp ]]; then mv -f "$tmp" "$dest"; else rm -f "$tmp"; fi
+    if [[ -s $tmp ]]; then
+      if [[ -n $check ]] && ! jq -e "$check" "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp" "$etag_file"
+        note "refusing $url: the response is not shaped like what was asked for"
+        [[ -s $dest ]] && return 0
+        return 1
+      fi
+      mv -f "$tmp" "$dest"
+    else
+      rm -f "$tmp"
+    fi
     return 0
   fi
 
@@ -170,9 +200,9 @@ cmd_catalog() {
   h="$CACHE_DIR/raw/hadith-editions.json"
   info="$CACHE_DIR/raw/quran-info.json"
 
-  fetch "$QURAN_API/editions.min.json"  "$q"    "$force" "$MAX_CATALOG_BYTES" || die "cannot reach quran editions and no cache"
-  fetch "$HADITH_API/editions.json"     "$h"    "$force" "$MAX_CATALOG_BYTES" || die "cannot reach hadith editions and no cache"
-  fetch "$QURAN_API/info.min.json"      "$info" "$force" "$MAX_CATALOG_BYTES" || die "cannot reach quran info and no cache"
+  fetch "$QURAN_API/editions.min.json"  "$q"    "$force" "$MAX_CATALOG_BYTES" "$SHAPE_EDITIONS" || die "cannot reach quran editions and no cache"
+  fetch "$HADITH_API/editions.json"     "$h"    "$force" "$MAX_CATALOG_BYTES" "$SHAPE_EDITIONS" || die "cannot reach hadith editions and no cache"
+  fetch "$QURAN_API/info.min.json"      "$info" "$force" "$MAX_CATALOG_BYTES" "$SHAPE_INFO"     || die "cannot reach quran info and no cache"
 
   # The top-level keys are underscore-form (eng_abdelhaleem); the URL slug lives
   # in .name (eng-abdelhaleem). Reading keys[] here would 404 every request.
@@ -247,6 +277,7 @@ sync_quran() {
   [[ -n $slug ]] || return 0
   valid_slug "$slug" || { note "refusing quran slug $slug"; return 1; }
   fetch "$QURAN_API/editions/$slug.min.json" "$(quran_path "$slug")" "$force" \
+        "$MAX_EDITION_BYTES" "$SHAPE_QURAN" \
     || { note "quran edition $slug unavailable"; return 1; }
 }
 
@@ -261,6 +292,7 @@ sync_hadith() {
   valid_slug "$slug" || { note "refusing hadith slug $slug"; return 1; }
   path="$(hadith_path "$slug")"
   fetch "$HADITH_API/editions/$slug.min.json" "$path" "$force" \
+        "$MAX_EDITION_BYTES" "$SHAPE_HADITH" \
     || { note "hadith edition $slug unavailable"; return 1; }
 
   book="$(book_of "$slug" || true)"
@@ -284,10 +316,20 @@ sync_hadith() {
         graders: ( $doc.hadiths | map(.grades // [] | map(.name)) | flatten | unique )
       }
 JQ
-  ) "$path" | write_atomic "$idx"
+  ) "$path" | write_atomic "$idx" || {
+    # set -e is suppressed inside a function reached through `||`, which is how
+    # cmd_sync calls this one, so the failure has to be handled rather than
+    # trusted to abort. Without this the meta step reads an index that is not
+    # there and complains twice about the same thing.
+    note "could not build an index for $slug"
+    return 1
+  }
 
   jq -c '{edition, book, total, counts: (.classes | map_values(length)), graders}' "$idx" \
-    | write_atomic "$(meta_path "$slug")"
+    | write_atomic "$(meta_path "$slug")" || {
+    note "could not build index metadata for $slug"
+    return 1
+  }
 }
 
 cmd_sync() {
@@ -427,9 +469,20 @@ cmd_pick() {
     [[ -n $qt && -s $(quran_path "$qt") ]] && secondary="$(quran_path "$qt")"
     [[ -z $primary && -n $secondary ]] && { primary="$secondary"; secondary=""; }
 
+    # A file cached by an older version of this script never went through the
+    # shape check on the way in, so the modulo below cannot assume a count.
+    local total=0 idx tries=0
     if [[ -n $primary ]]; then
-      local total idx tries=0
-      total="$(jq '.quran | length' "$primary")"
+      total="$(jq -r 'if (.quran | type) == "array" then (.quran | length) else 0 end' \
+                 "$primary" 2>/dev/null || echo 0)"
+      [[ $total =~ ^[0-9]+$ ]] || total=0
+      if (( total <= 0 )); then
+        note "cached quran edition at $primary is unusable"
+        primary=""
+      fi
+    fi
+
+    if [[ -n $primary ]]; then
       idx=$(( seed % total ))
       if (( varied )); then
         while (( tries < 20 )) && seen_has "ayah:$(jq -r --argjson i "$idx" '.quran[$i] | "\(.chapter):\(.verse)"' "$primary")"; do
