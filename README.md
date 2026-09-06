@@ -57,9 +57,17 @@ simply a matter of keeping a copy.
 Neither is treated as trustworthy. Edition slugs come out of those catalogs and
 end up in both a URL and a cache path, so they are matched against
 `^[A-Za-z0-9][A-Za-z0-9._-]*$` and refused otherwise — once when the catalog is
-built and again wherever one is used. Every download is capped, by `--max-filesize`
-and again by measuring what actually arrived, and a catalog that parses but
-carries no editions or the wrong number of surahs is rejected rather than cached.
+built and again wherever one is used. A catalog that parses but carries no
+editions, or the wrong number of surahs, is rejected rather than cached.
+
+Downloads are capped **while they arrive**, not once they have landed. A chunked
+response declares no length, so waiting for `curl` to finish and then measuring
+the file is waiting until it is already on the disk. The body is piped through
+`head -c`, which stops one byte past the cap and hangs up on `curl`;
+`--max-filesize` stays in front of it, and current `curl` in fact aborts at the
+cap itself with exit 63. Either ceiling alone is enough —
+`tests/inputs.test.sh` proves it by pointing the real downloader at a server that
+streams forever.
 
 ## How gradings are read
 

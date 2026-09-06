@@ -71,36 +71,105 @@ else
   fi
 fi
 
-# --- the size cap actually refuses bytes ------------------------------------
-# accept_within is what stands between a response and the cache, so drive it
-# directly rather than asserting that the source mentions it.
-( eval "$(sed -n '/^accept_within()/,/^}/p' bin/deen-fetch)"
+# --- the cap stops bytes as they arrive, not after they have landed ---------
+# The blocker in the second security review: --max-filesize only refuses a
+# response that declares a length, and measuring the file after curl finishes is
+# too late, because by then the whole thing is already on disk. So point the real
+# downloader at a server that streams a chunked body forever and check that it
+# stops on its own.
+PORT_F="$TMP/port"; COUNT_F="$TMP/sent"
+python3 tests/streamserver.py "$PORT_F" "$COUNT_F" &
+SRV=$!
+for _ in $(seq 1 100); do [[ -s $PORT_F ]] && break; sleep 0.1; done
+
+if [[ -s $PORT_F ]]; then
+  CAP=100000
+  started=$SECONDS
+  ( eval "$(sed -n '/^bounded_get()/,/^}/p' bin/deen-fetch)"
+    note() { :; }
+    bounded_get "http://127.0.0.1:$(cat "$PORT_F")/edition.json" \
+                "$TMP/stream-out" "$CAP" "$TMP/stream-etag"
+    exit $? )
+  rc=$?
+  elapsed=$(( SECONDS - started ))
+
+  wait "$SRV" 2>/dev/null
+  sent="$(cat "$COUNT_F" 2>/dev/null || echo 0)"
+  landed="$(wc -c < "$TMP/stream-out" 2>/dev/null || echo 0)"
+
+  (( rc == 2 )) \
+    && ok "an endless chunked response is refused (exit 2)" \
+    || bad "an endless chunked response returned $rc, expected 2"
+  (( landed == 0 )) \
+    && ok "nothing of it was left on disk" \
+    || bad "$landed bytes of the refused response were left on disk"
+  # Whichever ceiling fired, the refusal must not depend on which one it was.
+  (( sent <= 5000000 )) \
+    && ok "the transfer was cut at the cap, not after the body finished" \
+    || bad "the transfer ran on to $sent bytes"
+  (( elapsed < 30 )) \
+    && ok "it gave up in ${elapsed}s rather than reading forever" \
+    || bad "it took ${elapsed}s to give up"
+  # The socket buffers hold some slack past the cap, but it has to be slack, not
+  # the 512 MB the server was willing to send.
+  if (( sent > 0 && sent < 5000000 )); then
+    ok "the server got cut off after $sent bytes, well short of what it offered"
+  else
+    bad "the server sent $sent bytes before being cut off"
+  fi
+  # The etag must not survive a refused body, or the next run is told nothing
+  # changed and never retries.
+  [[ -e $TMP/stream-etag ]] \
+    && bad "an etag was kept for a response that was thrown away" \
+    || ok "no etag was kept for the refused response"
+else
+  kill "$SRV" 2>/dev/null
+  bad "the streaming test server never came up"
+fi
+
+# A body inside the cap still has to arrive intact.
+PORT2="$TMP/port2"; COUNT2="$TMP/sent2"
+python3 - "$PORT2" <<'SRV' &
+import socket, sys
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", 0)); srv.listen(1)
+open(sys.argv[1], "w").write(str(srv.getsockname()[1]))
+conn, _ = srv.accept()
+while b"\r\n\r\n" not in conn.recv(65536):
+    pass
+body = b'{"ok":true}'
+conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+conn.close(); srv.close()
+SRV
+SRV2=$!
+for _ in $(seq 1 100); do [[ -s $PORT2 ]] && break; sleep 0.1; done
+( eval "$(sed -n '/^bounded_get()/,/^}/p' bin/deen-fetch)"
   note() { :; }
-  big="$TMP/big"; dst="$TMP/dest-big"
-  head -c 5000 /dev/zero > "$big"
-  if accept_within "$big" "$dst" 1000 2>/dev/null; then exit 1; fi
-  [[ -e $dst ]] && exit 2
-  [[ -e $big ]] && exit 3
-  small="$TMP/small"; dst2="$TMP/dest-small"
-  head -c 500 /dev/zero > "$small"
-  accept_within "$small" "$dst2" 1000 || exit 4
-  [[ -s $dst2 ]] || exit 5
-  exit 0 )
-case $? in
-  0) ok "an oversized response is discarded and an in-cap one accepted" ;;
-  1) bad "an oversized response was accepted" ;;
-  2) bad "an oversized response was written to its destination" ;;
-  3) bad "the oversized temp file was left behind" ;;
-  *) bad "an in-cap response was rejected or not written" ;;
-esac
+  bounded_get "http://127.0.0.1:$(cat "$PORT2")/small.json" \
+              "$TMP/small-out" 100000 "$TMP/small-etag"
+  exit $? )
+rc2=$?
+wait "$SRV2" 2>/dev/null
+if (( rc2 == 0 )) && [[ "$(cat "$TMP/small-out" 2>/dev/null)" == '{"ok":true}' ]]; then
+  ok "a body inside the cap arrives intact"
+else
+  bad "an in-cap body was mangled or rejected (exit $rc2)"
+fi
 
 # Every curl call has to declare the cap, not just one of them.
 calls="$(grep -c 'curl -fsS' bin/deen-fetch)"
-caps="$(grep -c -- '--max-filesize "\$max"' bin/deen-fetch)"
+caps="$(grep -c -- '--max-filesize "$max"' bin/deen-fetch)"
 if (( caps == calls )); then
   ok "all $calls curl calls declare --max-filesize"
 else
   bad "$calls curl calls but $caps declare --max-filesize"
+fi
+# ...and the cap has to be applied to the stream, not to the finished file.
+if grep -q 'head -c \$(( max + 1 ))' bin/deen-fetch; then
+  ok "the body is truncated as it arrives"
+else
+  bad "nothing bounds the body while it is arriving"
 fi
 
 # --- a hostile slug never reaches the cached catalog ------------------------

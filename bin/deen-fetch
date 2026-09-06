@@ -79,18 +79,51 @@ write_atomic() {
 
 # Conditional GET. The @1 tag is mutable upstream, so an ETag is how we notice a
 # new edition without re-downloading megabytes on every sync.
-# Accept a downloaded temp file only if it is within the cap. The producer-side
-# --max-filesize below covers a response that declares its length; this covers
-# the one that does not.
-accept_within() {
-  local tmp="$1" dest="$2" max="$3" size
-  size="$(wc -c < "$tmp" 2>/dev/null || echo 0)"
-  if (( size > max )); then
-    rm -f "$tmp"
-    note "discarding oversized response for $dest ($size > $max bytes)"
-    return 1
+# A bounded download.
+#
+# curl's body goes through head, which stops one byte past the cap and closes the
+# pipe; curl dies of SIGPIPE right there. The ceiling is enforced while the bytes
+# are arriving rather than after they have all landed, which is the whole point:
+# --max-filesize only refuses a response that declares its length, and a chunked
+# or compressed one need not declare anything. It is kept as the cheap early
+# refusal for the responses that do.
+#
+# At most max+1 bytes ever reach the disk, and in practice fewer: curl aborts at
+# the cap itself with exit 63 before head has to.
+#
+#   0  a body within the cap. Empty is legitimate: that is how a 304 arrives.
+#   1  the transfer failed
+#   2  the response ran past the cap and was thrown away
+bounded_get() {
+  local url="$1" out="$2" max="$3" etag_file="$4"; shift 4
+  local rc size
+
+  # PIPESTATUS is the only way to see curl's own status through a pipe, and it
+  # survives exactly one command, so errexit and pipefail come off around the
+  # pipeline and go straight back on.
+  set +o pipefail +e
+  curl -fsS --compressed --max-time 120 --retry 2 --retry-delay 1 \
+       --max-filesize "$max" --etag-save "$etag_file" "$@" \
+       -o - "$url" 2>/dev/null | head -c $(( max + 1 )) > "$out"
+  rc=${PIPESTATUS[0]}
+  set -o pipefail -e
+
+  size="$(wc -c < "$out" 2>/dev/null || echo 0)"
+  # 63 is CURLE_FILESIZE_EXCEEDED. Current curl does police a chunked transfer
+  # against --max-filesize as it runs and aborts at the cap; that it does is a
+  # property of the version installed, not a guarantee, which is what head is
+  # there for. Either ceiling means the same thing — the response is refused,
+  # never truncated and kept.
+  if (( size > max )) || (( rc == 63 )); then
+    : > "$out"
+    # The etag would otherwise vouch for a body we refused, and the next run
+    # would ask conditionally and be told nothing had changed.
+    rm -f "$etag_file"
+    note "stopped an oversized response for $url at $size bytes (cap $max)"
+    return 2
   fi
-  mv -f "$tmp" "$dest"
+  if (( rc != 0 )); then rm -f "$etag_file"; return 1; fi
+  return 0
 }
 
 fetch() {
@@ -102,27 +135,26 @@ fetch() {
     [[ -s $dest ]] && return 0
     return 1
   fi
+
+  # Conditional only when there is something to be conditional about.
+  local cond=()
   if (( ! force )) && [[ -s $dest ]] && [[ -s $etag_file ]]; then
-    local tmp; tmp="$(mktemp)"
-    if curl -fsS --compressed --max-time 60 --retry 2 --retry-delay 1 \
-         --max-filesize "$max" \
-         --etag-compare "$etag_file" --etag-save "$etag_file" \
-         -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null | grep -q '^304$'; then
-      rm -f "$tmp"; return 0
-    fi
-    [[ -s $tmp ]] && { accept_within "$tmp" "$dest" "$max" && return 0; return 1; }
-    rm -f "$tmp"; return 0
+    cond=(--etag-compare "$etag_file")
   fi
 
-  local tmp; tmp="$(mktemp)"
-  if curl -fsS --compressed --max-time 120 --retry 2 --retry-delay 1 \
-       --max-filesize "$max" \
-       --etag-save "$etag_file" -o "$tmp" "$url"; then
-    accept_within "$tmp" "$dest" "$max" && return 0
-    [[ -s $dest ]] && return 0
-    return 1
+  local tmp rc; tmp="$(mktemp)"
+  bounded_get "$url" "$tmp" "$max" "$etag_file" "${cond[@]}"; rc=$?
+
+  if (( rc == 0 )); then
+    # An empty body is how a 304 arrives, and a zero-byte 200 is no use to us
+    # either, so both mean: keep what is cached. That is why -w '%{http_code}'
+    # is gone — it cannot share stdout with the body.
+    if [[ -s $tmp ]]; then mv -f "$tmp" "$dest"; else rm -f "$tmp"; fi
+    return 0
   fi
+
   rm -f "$tmp"
+  # Refused or unreachable, a cached copy still beats nothing.
   [[ -s $dest ]] && return 0
   return 1
 }
