@@ -104,9 +104,20 @@ Panel {
 
   // Summoning by hotkey moves no pointer, so a hover the bar was still holding
   // must not keep the centre indicators revealed behind the panel.
+  //
+  // Third-party widgets receive a PluginBarApi facade whose
+  // centerHoverRevealSuppressed is a readonly mirror — writing it throws a
+  // TypeError that aborts close() before controller.hide() runs, leaving the
+  // panel stuck open with keyboard focus. The facade exposes a setter method
+  // instead; the direct write only ever ran on first-party bars.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
-      root.bar.centerHoverRevealSuppressed = value
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function") {
+      root.bar.setCenterHoverRevealSuppressed(value)
+      return
+    }
+    if (root.bar && "centerHoverRevealSuppressed" in root.bar) {
+      try { root.bar.centerHoverRevealSuppressed = value } catch (e) {}
+    }
   }
 
   Timer {
