@@ -29,6 +29,8 @@ import "Model.js" as Model
 Item {
   id: root
   property var current: ({ text: "" })
+  // copyPassage copies what is shown, which is `current` unless an ayah is being viewed.
+  property var shownState: current
   property bool copied: false
   property bool copyFailed: false
   property bool copyPending: false
@@ -55,6 +57,9 @@ $CF
     copyFinished(1); o.push("fail:" + snap())
     copyProc.running = false
     copyPassage("all"); o.push("reset:" + snap())
+    // while an ayah is being viewed, what is copied is what is shown, not `current`
+    shownState = { text: "viewed" }; copyProc.running = false; copyFinished(0)
+    copyPassage("ayah"); o.push("shown:" + copyText)
     console.log("RESULT " + o.join(" "))
     Qt.quit()
   }
@@ -67,7 +72,7 @@ got="$(sed -n 's/.*RESULT //p' <<<"$out")"
 # off to close the pipe, and turning off what is already off closes nothing, so the
 # second copy used to leave wl-copy waiting for EOF forever. The watchdog runs while
 # a copy is pending and stops once it has finished.
-want="empty:---:false start:--P:true:wl-copy:all:x stdin1:true:true reentrant:keep ok:C--:true:[]:false idem:C-- again:--P:hadith:x:stdin2=true fail:-F- reset:--P"
+want="empty:---:false start:--P:true:wl-copy:all:x stdin1:true:true reentrant:keep ok:C--:true:[]:false idem:C-- again:--P:hadith:x:stdin2=true fail:-F- reset:--P shown:ayah:viewed"
 if [[ "$got" == "$want" ]]; then
   echo "ok    copy: empty is a no-op, running is not re-entered, copied/copyFailed transition and reset"
   echo; echo "copy: all checks passed"

@@ -189,7 +189,13 @@ With the panel open:
 - **s** opens and closes the settings
 - **c** copies the ayah and hadith on show to the clipboard (the copy button in the
   panel header does the same)
+- **←** / **→** (or **h** / **l**) show the previous or next ayah; **↑** / **↓** scroll the panel
 - **Tab** / **Shift+Tab** move to the next or previous panel
+
+The ayah arrows only change what is *shown*. They do not touch the rotation or the
+current pick, and the panel returns to today's ayah at the next rotation or with the
+"back" button. Stepping is served by `deen-fetch show` from the cache alone, so the
+edition must already be cached; it never downloads.
 
 Copying needs `wl-clipboard` (`wl-copy`), an optional dependency; without it the button
 shows a failure message. The copied text also lands in Omarchy's clipboard history if a

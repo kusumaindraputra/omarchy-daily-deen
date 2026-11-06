@@ -399,6 +399,49 @@ function pickArgs(helper, settings, force, offline) {
   return args
 }
 
+// Navigating ayahs only changes what is shown: the view copy carries the
+// viewed ayah, the saved state is never touched.
+function withViewedAyah(state, viewed) {
+  if (!state || typeof state !== "object") return state
+  if (!isAyahObject(viewed)) return state
+  var copy = {}
+  for (var k in state) if (Object.prototype.hasOwnProperty.call(state, k)) copy[k] = state[k]
+  copy.ayah = viewed
+  return copy
+}
+
+function isAyahObject(a) {
+  return !!a && typeof a === "object" && Number.isInteger(a.surah) && a.surah >= 1 &&
+    Number.isInteger(a.ayah) && a.ayah >= 1 && typeof a.text === "string"
+}
+
+// Which step buttons are dead. A missing or broken ayah disables both.
+function ayahEdges(ayah, lastSurah) {
+  if (!ayah || typeof ayah !== "object") return { first: true, last: true }
+  var lastS = Number.isInteger(lastSurah) ? lastSurah : 114
+  var count = ayah.ayahCount
+  return {
+    first: ayah.surah === 1 && ayah.ayah === 1,
+    last: Number.isInteger(count) && count >= 1 && ayah.surah === lastS && ayah.ayah === count
+  }
+}
+
+// argv for `deen-fetch show`: served from cache only, never downloads.
+function stepArgs(helper, settings, ayah, delta) {
+  if (delta !== 1 && delta !== -1) return null
+  if (!ayah || typeof ayah !== "object") return null
+  function get(k, fallback) {
+    var v = settings ? settings[k] : undefined
+    return v === undefined || v === null ? fallback : v
+  }
+  return [helper, "show",
+    "--quran", String(get("quranEdition", "ara-quranuthmanihaf")),
+    "--quran-translation", String(get("quranTranslationEdition", "eng-abdelhaleem")),
+    "--surah", String(ayah.surah),
+    "--ayah", String(ayah.ayah),
+    "--step", String(delta)]
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     PLUGIN_ID: PLUGIN_ID,
@@ -415,6 +458,7 @@ if (typeof module !== "undefined" && module.exports) {
     ayahReference: ayahReference, hadithReference: hadithReference,
     formatCopy: formatCopy,
     barLabel: barLabel, tooltipText: tooltipText,
-    cacheDir: cacheDir, stateDir: stateDir, pickArgs: pickArgs
+    cacheDir: cacheDir, stateDir: stateDir, pickArgs: pickArgs,
+    withViewedAyah: withViewedAyah, ayahEdges: ayahEdges, stepArgs: stepArgs
   }
 }

@@ -45,7 +45,9 @@ var STRINGS = {
     gradeFallbackNote: "This collection carries no gradings, so the filter was ignored.",
     ungradedNote: "Every hadith in this collection is sahih by construction, so it carries no grade strings.",
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
-    classMaudu: "Fabricated", classUnknown: "Ungraded"
+    classMaudu: "Fabricated", classUnknown: "Ungraded",
+    prevAyah: "Previous ayah", nextAyah: "Next ayah",
+    backToToday: "Back to today's ayah"
   },
 
   id: {
@@ -78,7 +80,9 @@ var STRINGS = {
     gradeFallbackNote: "Kitab ini tidak menyertakan penilaian derajat, jadi filternya diabaikan.",
     ungradedNote: "Seluruh hadis dalam kitab ini sahih, sehingga tidak mencantumkan keterangan derajat.",
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
-    classMaudu: "Maudu'", classUnknown: "Tanpa penilaian"
+    classMaudu: "Maudu'", classUnknown: "Tanpa penilaian",
+    prevAyah: "Ayat sebelumnya", nextAyah: "Ayat berikutnya",
+    backToToday: "Kembali ke ayat hari ini"
   },
 
   ms: {
@@ -111,7 +115,9 @@ var STRINGS = {
     gradeFallbackNote: "Kitab ini tidak menyertakan penilaian darjat, jadi penapis diabaikan.",
     ungradedNote: "Setiap hadis dalam kitab ini sahih, jadi ia tidak mencatatkan darjat.",
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
-    classMaudu: "Maudhu'", classUnknown: "Tanpa penilaian"
+    classMaudu: "Maudhu'", classUnknown: "Tanpa penilaian",
+    prevAyah: "Ayat sebelumnya", nextAyah: "Ayat seterusnya",
+    backToToday: "Kembali ke ayat hari ini"
   },
 
   ar: {
@@ -144,7 +150,9 @@ var STRINGS = {
     gradeFallbackNote: "هذا الكتاب لا يذكر درجات، فتم تجاهل عامل التصفية.",
     ungradedNote: "كل أحاديث هذا الكتاب صحيحة، ولذلك لا تُذكر درجاتها.",
     classSahih: "صحيح", classHasan: "حسن", classDaif: "ضعيف",
-    classMaudu: "موضوع", classUnknown: "بلا درجة"
+    classMaudu: "موضوع", classUnknown: "بلا درجة",
+    prevAyah: "الآية السابقة", nextAyah: "الآية التالية",
+    backToToday: "العودة إلى آية اليوم"
   },
 
   tr: {
@@ -177,7 +185,9 @@ var STRINGS = {
     gradeFallbackNote: "Bu kitapta derece bilgisi yok, bu yüzden filtre yok sayıldı.",
     ungradedNote: "Bu kitaptaki her hadis sahihtir, bu yüzden derece bilgisi taşımaz.",
     classSahih: "Sahih", classHasan: "Hasen", classDaif: "Zayıf",
-    classMaudu: "Mevzu", classUnknown: "Derecesiz"
+    classMaudu: "Mevzu", classUnknown: "Derecesiz",
+    prevAyah: "Önceki ayet", nextAyah: "Sonraki ayet",
+    backToToday: "Bugünün ayetine dön"
   },
 
   ur: {
@@ -210,7 +220,9 @@ var STRINGS = {
     gradeFallbackNote: "اس کتاب میں درجات درج نہیں، اس لیے فلٹر نظر انداز کر دیا گیا۔",
     ungradedNote: "اس کتاب کی ہر حدیث صحیح ہے، اسی لیے درجہ درج نہیں کیا جاتا۔",
     classSahih: "صحیح", classHasan: "حسن", classDaif: "ضعیف",
-    classMaudu: "موضوع", classUnknown: "بلا درجہ"
+    classMaudu: "موضوع", classUnknown: "بلا درجہ",
+    prevAyah: "پچھلی آیت", nextAyah: "اگلی آیت",
+    backToToday: "آج کی آیت پر واپس"
   },
 
   bn: {
@@ -243,7 +255,9 @@ var STRINGS = {
     gradeFallbackNote: "এই গ্রন্থে মান উল্লেখ নেই, তাই ফিল্টার উপেক্ষা করা হয়েছে।",
     ungradedNote: "এই গ্রন্থের প্রতিটি হাদিসই সহিহ, তাই আলাদা মান লেখা থাকে না।",
     classSahih: "সহিহ", classHasan: "হাসান", classDaif: "দুর্বল",
-    classMaudu: "জাল", classUnknown: "মানহীন"
+    classMaudu: "জাল", classUnknown: "মানহীন",
+    prevAyah: "আগের আয়াত", nextAyah: "পরের আয়াত",
+    backToToday: "আজকের আয়াতে ফিরুন"
   },
 
   fr: {
@@ -276,7 +290,9 @@ var STRINGS = {
     gradeFallbackNote: "Ce recueil ne porte aucun jugement, le filtre a donc été ignoré.",
     ungradedNote: "Tous les hadiths de ce recueil sont sahih, aucun jugement n'y figure donc.",
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
-    classMaudu: "Forgé", classUnknown: "Non jugé"
+    classMaudu: "Forgé", classUnknown: "Non jugé",
+    prevAyah: "Verset précédent", nextAyah: "Verset suivant",
+    backToToday: "Retour au verset du jour"
   },
 
   ru: {
@@ -309,7 +325,9 @@ var STRINGS = {
     gradeFallbackNote: "В этом сборнике нет оценок, поэтому фильтр не применялся.",
     ungradedNote: "Все хадисы этого сборника достоверны, поэтому степень в них не указывается.",
     classSahih: "Сахих", classHasan: "Хасан", classDaif: "Даиф",
-    classMaudu: "Вымышленный", classUnknown: "Без оценки"
+    classMaudu: "Вымышленный", classUnknown: "Без оценки",
+    prevAyah: "Предыдущий аят", nextAyah: "Следующий аят",
+    backToToday: "Назад к аяту дня"
   }
 }
 

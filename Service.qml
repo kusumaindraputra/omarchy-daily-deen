@@ -123,7 +123,13 @@ Item {
   // that fingerprint still matches, so a cosmetic change like the bar display
   // mode costs nothing. Debounced because shell.json is rewritten once per
   // control and a language change writes two keys at once.
-  onSettingsChanged: if (ready) settingsSettle.restart()
+  onSettingsChanged: {
+    // A different edition makes the ayah being looked at a stale one.
+    var key = String(setting("quranEdition", "")) + "|" + String(setting("quranTranslationEdition", ""))
+    if (key !== viewKey) { viewKey = key; resetView() }
+    if (ready) settingsSettle.restart()
+  }
+  property string viewKey: ""
 
   Timer {
     id: settingsSettle
@@ -207,6 +213,7 @@ Item {
     if (!Model.hasContent(next)) return
     var changed = next.chosenAt !== root.current.chosenAt
     var first = !root.primed
+    if (changed) resetView()
     root.current = next
     root.primed = true
     if (!changed || first) return
@@ -325,6 +332,83 @@ Item {
     }
   }
 
+  // --- browsing neighbours ---------------------------------------------------
+
+  // A temporary view: the ayah before or after the one in rotation, read from
+  // the cache by `deen-fetch show`. Nothing is written; the rotation and
+  // current.json are untouched, and a new pick or edition change drops it.
+  property var viewedAyah: null
+  property bool navBusy: false
+  property string navError: ""
+  property string stepOut: ""
+  property string stepErr: ""
+  property int stepWaiting: 0
+  property int stepCode: 0
+  readonly property var shownState: Model.withViewedAyah(current, viewedAyah)
+
+  function stepAyah(delta) {
+    if (navBusy || !ready) return
+    var base = viewedAyah ? viewedAyah : (current ? current.ayah : null)
+    if (!base) return
+    var args = Model.stepArgs(helperPath, settings, base, delta)
+    if (!args) return
+    navBusy = true
+    stepOut = ""
+    stepErr = ""
+    stepCode = 0
+    stepWaiting = 3
+    stepProc.command = ["/bin/bash"].concat(args)
+    stepWatchdog.restart()
+    stepProc.running = true
+  }
+
+  // navBusy refuses the next step, so it must never outlive a stuck helper.
+  Timer {
+    id: stepWatchdog
+    interval: 8000
+    onTriggered: {
+      if (!root.navBusy) return
+      stepProc.running = false
+      root.stepFinished(-1, "", "timed out")
+    }
+  }
+
+  // The process is done once it has exited and both pipes have drained.
+  function stepPart() {
+    stepWaiting -= 1
+    if (stepWaiting <= 0) stepFinished(stepCode, stepOut, stepErr)
+  }
+
+  function stepFinished(code, text, err) {
+    navBusy = false
+    stepWatchdog.stop()
+    if (code !== 0) {
+      // An edge ("no previous ayah") is not worth showing; keep the view.
+      navError = String(err || "").trim()
+      return
+    }
+    var obj = null
+    try { obj = JSON.parse(String(text || "")) } catch (e) { obj = null }
+    if (!obj || typeof obj !== "object") {
+      navError = "bad data"
+      return
+    }
+    viewedAyah = obj
+    navError = ""
+  }
+
+  function resetView() {
+    viewedAyah = null
+    navError = ""
+  }
+
+  Process {
+    id: stepProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.stepOut = String(text || ""); root.stepPart() } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.stepErr = String(text || ""); root.stepPart() } }
+    onExited: function(exitCode) { root.stepCode = exitCode; root.stepPart() }
+  }
+
   // --- clipboard -----------------------------------------------------------
 
   property bool copied: false
@@ -337,7 +421,7 @@ Item {
 
   function copyPassage(which) {
     if (copyProc.running || copyPending) return
-    var text = Model.formatCopy(root.current, which || "all")
+    var text = Model.formatCopy(root.shownState, which || "all")
     if (!text) return
     copied = false
     copyFailed = false
@@ -417,12 +501,16 @@ Item {
       out.lastError = root.lastError
       out.copied = root.copied
       out.copyFailed = root.copyFailed
+      out.viewedAyah = root.viewedAyah ? root.viewedAyah.surah + ":" + root.viewedAyah.ayah : null
+      out.navError = root.navError
       return JSON.stringify(out)
     }
     function next(): string { root.rotate(true); return "ok" }
     function refresh(): string { root.rotate(false); return "ok" }
     function sync(): string { root.sync(); return "ok" }
     function catalog(): string { root.refreshCatalog(); return "ok" }
+    function step(delta: int): string { root.stepAyah(delta); return "ok" }
+    function reset(): string { root.resetView(); return "ok" }
     function copy(which: string): string { root.copyPassage(which); return "ok" }
   }
 

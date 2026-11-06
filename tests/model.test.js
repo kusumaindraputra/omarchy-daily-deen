@@ -280,3 +280,66 @@ test("formatCopy for a hadith without Arabic has no blank first line or doubled 
   assert.equal(out, "Deeds.\n\n— C 2")
   assert.doesNotMatch(out, /\n\n\n/)
 })
+
+// --- ayah navigation --------------------------------------------------------
+
+const AY = { surah: 2, ayah: 5, text: "x", ayahCount: 286 }
+
+test("withViewedAyah swaps in a valid ayah on a copy and leaves the state alone", () => {
+  const state = { ayah: { surah: 1, ayah: 1, text: "a" }, hadith: { id: 7 } }
+  const out = Model.withViewedAyah(state, AY)
+  assert.notEqual(out, state)
+  assert.deepEqual(out.ayah, AY)
+  assert.deepEqual(out.hadith, { id: 7 })
+  assert.deepEqual(state.ayah, { surah: 1, ayah: 1, text: "a" })
+})
+
+test("withViewedAyah returns the state as is for null, broken or missing input", () => {
+  const state = { ayah: { surah: 1, ayah: 1, text: "a" } }
+  assert.equal(Model.withViewedAyah(state, null), state)
+  assert.equal(Model.withViewedAyah(state, { surah: 0, ayah: 1, text: "x" }), state)
+  assert.equal(Model.withViewedAyah(state, { surah: 2, ayah: 1.5, text: "x" }), state)
+  assert.equal(Model.withViewedAyah(state, { surah: 2, ayah: 1 }), state)
+  assert.equal(Model.withViewedAyah(state, "nope"), state)
+  assert.equal(Model.withViewedAyah(null, AY), null)
+  assert.equal(Model.withViewedAyah(undefined, AY), undefined)
+  assert.equal(Model.withViewedAyah("junk", AY), "junk")
+})
+
+test("ayahEdges flags the first and last ayah of the Quran", () => {
+  assert.deepEqual(Model.ayahEdges({ surah: 1, ayah: 1, ayahCount: 7 }), { first: true, last: false })
+  assert.deepEqual(Model.ayahEdges(AY), { first: false, last: false })
+  assert.deepEqual(Model.ayahEdges({ surah: 114, ayah: 6, ayahCount: 6 }), { first: false, last: true })
+  assert.deepEqual(Model.ayahEdges({ surah: 114, ayah: 5, ayahCount: 6 }), { first: false, last: false })
+  assert.deepEqual(Model.ayahEdges({ surah: 3, ayah: 200, ayahCount: 200 }, 3), { first: false, last: true })
+})
+
+test("ayahEdges: a missing ayahCount is never the last ayah; a broken ayah disables both", () => {
+  assert.equal(Model.ayahEdges({ surah: 114, ayah: 6 }).last, false)
+  assert.equal(Model.ayahEdges({ surah: 114, ayah: 6, ayahCount: "6" }).last, false)
+  assert.deepEqual(Model.ayahEdges(null), { first: true, last: true })
+  assert.deepEqual(Model.ayahEdges(undefined), { first: true, last: true })
+  assert.deepEqual(Model.ayahEdges("x"), { first: true, last: true })
+})
+
+test("stepArgs builds the show argv with the default editions", () => {
+  assert.deepEqual(Model.stepArgs("/h/deen-fetch", {}, AY, 1), [
+    "/h/deen-fetch", "show",
+    "--quran", "ara-quranuthmanihaf",
+    "--quran-translation", "eng-abdelhaleem",
+    "--surah", "2", "--ayah", "5", "--step", "1"])
+  assert.deepEqual(Model.stepArgs("h", null, AY, -1).slice(-2), ["--step", "-1"])
+})
+
+test("stepArgs uses custom editions and stringifies every argument", () => {
+  const out = Model.stepArgs("h", { quranEdition: "ind-x", quranTranslationEdition: "ind-y" }, AY, -1)
+  assert.deepEqual(out, ["h", "show", "--quran", "ind-x", "--quran-translation", "ind-y",
+    "--surah", "2", "--ayah", "5", "--step", "-1"])
+  assert.ok(out.every((a) => typeof a === "string"))
+})
+
+test("stepArgs refuses any delta other than 1 or -1", () => {
+  for (const d of [0, 2, -2, 0.5, "1", null, undefined, NaN]) {
+    assert.equal(Model.stepArgs("h", {}, AY, d), null)
+  }
+})

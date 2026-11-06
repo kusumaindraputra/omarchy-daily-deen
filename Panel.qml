@@ -60,7 +60,7 @@ Panel {
   }
   function t(key) { return I18n.t(locale, key) }
 
-  readonly property var ayah: current ? current.ayah : null
+  readonly property var ayah: service && service.viewedAyah ? service.viewedAyah : (current ? current.ayah : null)
   readonly property var hadith: current ? current.hadith : null
   readonly property bool showArabic: cfg("showArabic", true) === true
 
@@ -260,6 +260,13 @@ Panel {
       blocked: root.dropdownOpen
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (dx !== 0) {
+          if (root.service) root.service.stepAyah(dx < 0 ? -1 : 1)
+        } else if (dy !== 0 && scroll.interactive) {
+          scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height, scroll.contentY + dy * 80))
+        }
+      }
       onTextKey: function(key) {
         if (key === "n" || key === "N") { if (root.service) root.service.rotate(true) }
         else if (key === "c" || key === "C") { if (root.service) root.service.copyPassage("all") }
@@ -359,13 +366,43 @@ Panel {
 
             Text {
               width: parent.width
-              text: Model.ayahReference(root.current)
+              text: Model.ayahReference({ ayah: root.ayah })
                 + (root.ayah && root.ayah.translationAuthor ? "  ·  " + root.ayah.translationAuthor : "")
               color: root.dim
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
               textFormat: Text.PlainText
               elide: Text.ElideRight
+            }
+
+            // Look at the neighbouring ayahs without touching the rotation.
+            Row {
+              spacing: Style.spacing.sm
+              readonly property var edges: Model.ayahEdges(root.ayah)
+              readonly property bool busy: root.service ? root.service.navBusy === true : false
+              PanelActionButton {
+                iconText: "\u{F0141}"
+                tooltipText: root.t("prevAyah")
+                foreground: root.contentForeground
+                enabled: !parent.edges.first && !parent.busy
+                opacity: enabled ? 1 : 0.35
+                onClicked: if (root.service) root.service.stepAyah(-1)
+              }
+              PanelActionButton {
+                iconText: "\u{F0142}"
+                tooltipText: root.t("nextAyah")
+                foreground: root.contentForeground
+                enabled: !parent.edges.last && !parent.busy
+                opacity: enabled ? 1 : 0.35
+                onClicked: if (root.service) root.service.stepAyah(1)
+              }
+              PanelActionButton {
+                visible: root.service && root.service.viewedAyah !== null
+                iconText: "\u{F0450}"
+                tooltipText: root.t("backToToday")
+                foreground: root.contentForeground
+                onClicked: if (root.service) root.service.resetView()
+              }
             }
           }
 
