@@ -18,10 +18,28 @@ Item {
 
   readonly property string pluginId: "io.github.kusumaindraputra.daily-deen"
 
-  // Services are not handed `settings`; only bar widgets are. shellConfig is
-  // reassigned wholesale whenever shell.json changes, so reading it here is a
-  // live binding rather than a one-time copy.
-  readonly property var settings: Model.entrySettings(shell ? shell.shellConfig : null, pluginId)
+  // A service is not handed `settings`, and the shell object it is given is a
+  // scoped PluginShellApi with no shellConfig on it — reading shell.shellConfig
+  // here yields undefined, so every setting silently read as its default and a
+  // changed language never reached the helper. shell.barConfig exists but is
+  // only refreshed when the plugin registry changes, not when shell.json does.
+  //
+  // The bar widgets are the one source that is live: the bar patches each
+  // widget's `settings` in place on every change. They hand it over through
+  // adoptSettings(); until the first one has, the barConfig snapshot stands in.
+  property var pushedSettings: null
+  readonly property var settings: pushedSettings !== null
+    ? pushedSettings
+    : Model.entrySettings(shell ? { bar: shell.barConfig } : null, pluginId)
+
+  // One widget per monitor all push the same thing, and the bar injects twice
+  // on purpose; comparing keeps that from restarting the repick timer.
+  function adoptSettings(entry) {
+    var next = ({})
+    for (var key in entry) if (key !== "id") next[key] = entry[key]
+    if (JSON.stringify(next) === JSON.stringify(pushedSettings)) return
+    pushedSettings = next
+  }
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
     return value === undefined || value === null ? fallback : value

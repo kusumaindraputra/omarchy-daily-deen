@@ -67,12 +67,19 @@ BarWidget {
     if ("service" in target) target.service = root.service
   }
 
+  // The service cannot see shell.json itself (see Service.settings), so the
+  // widget — whose `settings` the bar keeps current — passes it along.
+  function feedService() {
+    if (root.service && typeof root.service.adoptSettings === "function" && root.settings)
+      root.service.adoptSettings(root.settings)
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
   onBarChanged: injectPanel()
-  onSettingsChanged: injectPanel()
-  onServiceChanged: injectPanel()
+  onSettingsChanged: { injectPanel(); feedService() }
+  onServiceChanged: { injectPanel(); feedService() }
 
   Loader {
     id: panelLoader

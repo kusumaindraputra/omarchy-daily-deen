@@ -38,25 +38,22 @@ Panel {
   readonly property var hadithMeta: service ? service.hadithMeta : null
   readonly property string locale: service ? service.locale : "en"
 
-  // The bar hands a panel its `settings` as a copy and re-pushes it on every
-  // activeItemChanged, which is every time this panel opens. That copy was
-  // observed disagreeing with shell.json and with the service — the pickers
-  // offered English and A. J. Arberry while the ayah rendered in Indonesian —
-  // stale by exactly the most recent change, and only a shell restart cleared
-  // it. What put it out of step is not pinned down: an edit made to shell.json
-  // from outside does reach it. Reading shellConfig removes the question, since
-  // it is reassigned wholesale on every change and so is a binding rather than
-  // a copy; Service.qml reads it for its own reasons and says so.
+  // Where the panel reads its settings from, and why it is not
+  // bar.shell.shellConfig: a third-party plugin's bar.shell is a scoped
+  // PluginShellApi that has no shellConfig, so that read was always undefined,
+  // liveSettings was always {}, and every control showed and wrote defaults.
+  // persist() builds its entry from this, so each change also wiped every
+  // other key — choosing a hadith language erased the translation language.
   //
-  // persist() has to read from here too, and that part is not guesswork:
-  // shell.qml's updateEntryInline builds the entry it writes out of nothing but
-  // the object handed to it, so an entry assembled from a stale copy would put
-  // every key it did not know about back to what it used to be.
+  // The host widget's `settings` is the live one: the bar patches it in place
+  // on every change, and persist() below updates it first so the panel redraws
+  // on the click itself. The copy pushed into this panel is the fallback.
   //
-  // The pushed copy stays as the fallback for a panel with no shell yet.
-  readonly property var liveSettings: (bar && bar.shell)
-    ? Model.entrySettings(bar.shell.shellConfig, moduleName)
-    : settings
+  // persist() has to read from here too: shell.qml's updateEntryInline builds
+  // the entry it writes out of nothing but the object handed to it, so an
+  // entry assembled from a stale copy would put every key it did not know
+  // about back to what it used to be.
+  readonly property var liveSettings: (hostWidget && hostWidget.settings) ? hostWidget.settings : settings
   function cfg(name, fallback) {
     var value = liveSettings ? liveSettings[name] : undefined
     return value === undefined || value === null ? fallback : value
@@ -542,6 +539,7 @@ Panel {
             }
 
             SearchableDropdown {
+              id: translationPicker
               width: parent.width
               label: root.t("quranTranslation")
               placeholderText: root.t("search")
@@ -576,6 +574,7 @@ Panel {
             }
 
             SearchableDropdown {
+              id: bookPicker
               width: parent.width
               label: root.t("hadithBook")
               placeholderText: root.t("search")
@@ -589,6 +588,7 @@ Panel {
             // Most book-and-language pairs have exactly one edition, so the
             // picker only earns its space when there is a choice to make.
             SearchableDropdown {
+              id: editionPicker
               width: parent.width
               visible: root.hadithEditions.length > 1
               label: root.t("hadithEdition")
@@ -599,6 +599,15 @@ Panel {
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ hadithEdition: v }) }
             }
+
+            // SearchableDropdown assigns its own `value` when an option is
+            // picked, which severs the `value:` binding. These three depend on
+            // another picker (a new language changes the edition list and
+            // writes a new edition), so without a Binding they keep showing
+            // what was last picked by hand instead of what is now stored.
+            Binding { target: translationPicker; property: "value"; value: root.cfg("quranTranslationEdition", "") }
+            Binding { target: bookPicker; property: "value"; value: root.currentBook }
+            Binding { target: editionPicker; property: "value"; value: root.cfg("hadithEdition", "eng-abudawud") }
 
             Dropdown {
               width: parent.width
