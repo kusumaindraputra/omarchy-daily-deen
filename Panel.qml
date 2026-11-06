@@ -91,8 +91,11 @@ Panel {
   }
 
   function close() {
-    setCenterHoverRevealSuppressed(false)
+    // Hide first. The reveal flag is cosmetic, and a failure in it once left
+    // the panel impossible to close — with KeyboardPanel's exclusive keyboard
+    // grab still held, which is what made the whole session feel stuck.
     root.controller.hide()
+    setCenterHoverRevealSuppressed(false)
   }
 
   function toggle() { root.opened ? root.close() : root.open() }
@@ -105,9 +108,18 @@ Panel {
 
   // Summoning by hotkey moves no pointer, so a hover the bar was still holding
   // must not keep the centre indicators revealed behind the panel.
+  //
+  // Plugins are handed a PluginBarApi, whose centerHoverRevealSuppressed is
+  // read-only: assigning to it throws. The setter is the supported way in; the
+  // assignment stays only as a fallback for a bar object that has no setter.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
-      root.bar.centerHoverRevealSuppressed = value
+    if (!root.bar) return
+    if (typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if ("centerHoverRevealSuppressed" in root.bar) {
+      // A cosmetic flag must never be able to break the caller.
+      try { root.bar.centerHoverRevealSuppressed = value } catch (e) {}
+    }
   }
 
   Timer {
