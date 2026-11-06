@@ -146,6 +146,8 @@ $XDG_CACHE_HOME/omarchy-daily-deen/
 $XDG_STATE_HOME/omarchy-daily-deen/
   current.json          the passage on screen, and when it was chosen
   seen.json             recent picks, to avoid immediate repeats in random mode
+  favorites.json        starred ayahs: surah:ayah and a surah name, no text
+  history.json          recently viewed ayahs, same shape, no text
 ```
 
 The cache is regenerable and safe to delete. The index is what makes the offline mode
@@ -163,6 +165,8 @@ bin/deen-fetch catalog                       # refresh the edition lists
 bin/deen-fetch sync --hadith ind-abudawud    # download and index
 bin/deen-fetch pick --force …                # choose a new passage now
 bin/deen-fetch status                        # what is on screen
+bin/deen-fetch lists                         # favorites and history, as JSON
+bin/deen-fetch fav-toggle --surah 2 --ayah 255 --name "Al-Baqara"   # star or unstar an ayah
 ```
 
 Over IPC:
@@ -190,12 +194,20 @@ With the panel open:
 - **c** copies the ayah and hadith on show to the clipboard (the copy button in the
   panel header does the same)
 - **←** / **→** (or **h** / **l**) show the previous or next ayah; **↑** / **↓** scroll the panel
+- **f** toggles the favorite star on the ayah on show (the star button does the same)
+- **b** opens the saved list, with a favorites tab and a history tab
 - **Tab** / **Shift+Tab** move to the next or previous panel
 
 The ayah arrows only change what is *shown*. They do not touch the rotation or the
 current pick, and the panel returns to today's ayah at the next rotation or with the
 "back" button. Stepping is served by `deen-fetch show` from the cache alone, so the
 edition must already be cached; it never downloads.
+
+Clicking a row in the saved list shows that ayah the same way the arrows do: view-only,
+served from the cache, so the edition must already be cached. Favorites and history are
+kept in `favorites.json` and `history.json` in the state directory. They hold only
+`surah:ayah` references and a surah name, never any ayah text. They are removed along
+with the rest of the state directory (see Remove).
 
 Copying needs `wl-clipboard` (`wl-copy`), an optional dependency; without it the button
 shows a failure message. The copied text also lands in Omarchy's clipboard history if a

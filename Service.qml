@@ -216,6 +216,8 @@ Item {
     if (changed) resetView()
     root.current = next
     root.primed = true
+    // A new pick is a new history entry.
+    if (changed) root.refreshLists()
     if (!changed || first) return
     root.rotated()
     // Backstop for the case primed cannot see: a second instance of this
@@ -352,6 +354,22 @@ Item {
     if (!base) return
     var args = Model.stepArgs(helperPath, settings, base, delta)
     if (!args) return
+    runShow(args)
+  }
+
+  // Show one specific ayah (from the saved list) the same way a step does: a
+  // temporary view, nothing written. Shares navBusy with stepAyah, so a jump and
+  // a step can never race over the same process.
+  function jumpTo(surah, ayah) {
+    if (navBusy || !ready) return
+    var args = Model.jumpArgs(helperPath, settings, surah, ayah)
+    if (!args) return
+    runShow(args)
+  }
+
+  // The one place a `deen-fetch show` is started. Callers have already checked
+  // navBusy and ready.
+  function runShow(args) {
     navBusy = true
     stepOut = ""
     stepErr = ""
@@ -408,6 +426,91 @@ Item {
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.stepErr = String(text || ""); root.stepPart() } }
     onExited: function(exitCode) { root.stepCode = exitCode; root.stepPart() }
   }
+
+  // --- favourites and history ------------------------------------------------
+
+  property var favorites: []
+  property var history: []
+  property bool listsBusy: false
+  property string listsError: ""
+  property string listsOut: ""
+  property string listsErr: ""
+  property int listsWaiting: 0
+  property int listsCode: 0
+  readonly property bool shownIsFavorite: Model.isFavorite(favorites, shownState ? shownState.ayah : null)
+
+  function refreshLists() {
+    if (listsBusy || !ready) return
+    var args = Model.listsArgs(helperPath)
+    if (!args) return
+    runLists(args)
+  }
+
+  // Toggles the ayah on screen, which is the viewed one while browsing.
+  function toggleFavorite() {
+    if (listsBusy || !ready) return
+    var args = Model.favoriteArgs(helperPath, shownState ? shownState.ayah : null)
+    if (!args) return
+    runLists(args)
+  }
+
+  function runLists(args) {
+    listsBusy = true
+    listsOut = ""
+    listsErr = ""
+    listsCode = 0
+    listsWaiting = 3
+    listsProc.command = ["/bin/bash"].concat(args)
+    listsWatchdog.restart()
+    listsProc.running = true
+  }
+
+  // listsBusy refuses the next call, so it must never outlive a stuck helper.
+  // No retry afterwards: a failure waits for a person (or the next new pick).
+  Timer {
+    id: listsWatchdog
+    interval: 8000
+    onTriggered: {
+      if (!root.listsBusy) return
+      listsProc.running = false
+      root.listsFinished(-1, "", "timed out")
+    }
+  }
+
+  function listsPart() {
+    listsWaiting -= 1
+    if (listsWaiting <= 0) listsFinished(listsCode, listsOut, listsErr)
+  }
+
+  function listsFinished(code, text, err) {
+    listsBusy = false
+    listsWatchdog.stop()
+    if (code !== 0) {
+      listsError = String(err || "").trim() || "failed"
+      return
+    }
+    // parseLists is forgiving and turns junk into empty lists, which would wipe
+    // good ones; only well-formed JSON gets that far.
+    var probe = null
+    try { probe = JSON.parse(String(text || "")) } catch (e) { probe = null }
+    var parsed = probe && typeof probe === "object" ? Model.parseLists(String(text || "")) : null
+    if (!parsed || !Array.isArray(parsed.favorites) || !Array.isArray(parsed.history)) {
+      listsError = "bad data"
+      return
+    }
+    favorites = parsed.favorites
+    history = parsed.history
+    listsError = ""
+  }
+
+  Process {
+    id: listsProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.listsOut = String(text || ""); root.listsPart() } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.listsErr = String(text || ""); root.listsPart() } }
+    onExited: function(exitCode) { root.listsCode = exitCode; root.listsPart() }
+  }
+
+  onReadyChanged: if (ready) refreshLists()
 
   // --- clipboard -----------------------------------------------------------
 
@@ -503,6 +606,10 @@ Item {
       out.copyFailed = root.copyFailed
       out.viewedAyah = root.viewedAyah ? root.viewedAyah.surah + ":" + root.viewedAyah.ayah : null
       out.navError = root.navError
+      out.favorites = root.favorites.length
+      out.history = root.history.length
+      out.shownFavorite = root.shownIsFavorite
+      out.listsError = root.listsError
       return JSON.stringify(out)
     }
     function next(): string { root.rotate(true); return "ok" }
@@ -511,6 +618,8 @@ Item {
     function catalog(): string { root.refreshCatalog(); return "ok" }
     function step(delta: int): string { root.stepAyah(delta); return "ok" }
     function reset(): string { root.resetView(); return "ok" }
+    function favorite(): string { root.toggleFavorite(); return "ok" }
+    function jump(surah: int, ayah: int): string { root.jumpTo(surah, ayah); return "ok" }
     function copy(which: string): string { root.copyPassage(which); return "ok" }
   }
 

@@ -30,6 +30,27 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   property bool settingsOpen: false
+  // The saved-ayahs view (favourites and history) replaces the reading view
+  // while it is open. 0 is favourites, 1 is history.
+  property bool savedOpen: false
+  property int savedTab: 0
+  onOpenedChanged: if (!opened) savedOpen = false
+
+  // Newest first. The helper's order is not relied upon.
+  function savedEntries(tab) {
+    var list = service ? (tab === 0 ? service.favorites : service.history) : []
+    return (list || []).slice().sort(function(a, b) { return (b.at || 0) - (a.at || 0) })
+  }
+  function toggleSaved() {
+    savedOpen = !savedOpen
+    // Opening it is a fair moment to look again; nothing else polls.
+    if (savedOpen && service) service.refreshLists()
+  }
+  function openSaved(entry) {
+    if (!entry || !service) return
+    service.jumpTo(entry.surah, entry.ayah)
+    savedOpen = false
+  }
   property int nowTick: Date.now()
 
   // `current` rather than `state`: Item.state is taken.
@@ -250,7 +271,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(520))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight)
+    contentHeight: panel.fittedContentHeight(Math.max(column.implicitHeight, root.savedOpen ? Style.space(360) : 0))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -258,23 +279,152 @@ Panel {
       // A picker's search field owns the keyboard while it is up; without this
       // typing a filter would also drive the panel behind it.
       blocked: root.dropdownOpen
-      onCloseRequested: root.close()
+      // Esc backs out of the saved view first, and closes the panel on the next press.
+      onCloseRequested: { if (root.savedOpen) root.savedOpen = false; else root.close() }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
-        if (dx !== 0) {
+        if (root.savedOpen) {
+          if (dx !== 0) root.savedTab = dx < 0 ? 0 : 1
+          else if (dy !== 0)
+            savedList.contentY = Math.max(0, Math.min(Math.max(0, savedList.contentHeight - savedList.height), savedList.contentY + dy * 80))
+        } else if (dx !== 0) {
           if (root.service) root.service.stepAyah(dx < 0 ? -1 : 1)
         } else if (dy !== 0 && scroll.interactive) {
           scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height, scroll.contentY + dy * 80))
         }
       }
       onTextKey: function(key) {
-        if (key === "n" || key === "N") { if (root.service) root.service.rotate(true) }
+        if (key === "b" || key === "B") root.toggleSaved()
+        else if (root.savedOpen) return
+        else if (key === "f" || key === "F") { if (root.service) root.service.toggleFavorite() }
+        else if (key === "n" || key === "N") { if (root.service) root.service.rotate(true) }
         else if (key === "c" || key === "C") { if (root.service) root.service.copyPassage("all") }
         else if (key === "s" || key === "S") root.settingsOpen = !root.settingsOpen
       }
 
+      // ---- saved ayahs
+
+      Item {
+        id: savedView
+        anchors.fill: parent
+        visible: root.savedOpen
+
+        Column {
+          id: savedHead
+          width: parent.width
+          spacing: Style.spacing.sm
+
+          Row {
+            spacing: Style.spacing.sm
+            PanelActionButton {
+              iconText: "\u{F0E16}"
+              tooltipText: root.t("savedAyahs")
+              foreground: Commons.Color.accent
+              onClicked: root.savedOpen = false
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.t("savedAyahs")
+              color: root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.body
+              textFormat: Text.PlainText
+            }
+          }
+
+          Row {
+            spacing: Style.spacing.sm
+            Button {
+              text: root.t("favorites")
+              bordered: root.savedTab === 0
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: root.savedTab = 0
+            }
+            Button {
+              text: root.t("history")
+              bordered: root.savedTab === 1
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: root.savedTab = 1
+            }
+          }
+
+          Row {
+            visible: root.service && root.service.listsError !== ""
+            spacing: Style.spacing.sm
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.t("listsFailed")
+              color: root.dim
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              textFormat: Text.PlainText
+            }
+            Button {
+              text: root.t("retry")
+              bordered: true
+              enabled: !(root.service && root.service.listsBusy)
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: if (root.service) root.service.refreshLists()
+            }
+          }
+        }
+
+        ListView {
+          id: savedList
+          anchors.top: savedHead.bottom
+          anchors.topMargin: Style.spacing.sm
+          anchors.bottom: parent.bottom
+          width: parent.width
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          model: root.savedOpen ? root.savedEntries(root.savedTab) : []
+
+          delegate: Rectangle {
+            required property var modelData
+            width: savedList.width
+            height: Style.space(34)
+            radius: Style.space(6)
+            color: rowArea.containsMouse ? Qt.alpha(root.contentForeground, 0.1) : "transparent"
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.sm
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.sm
+              text: Model.listLabel(modelData)
+              color: root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.body
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+            }
+            MouseArea {
+              id: rowArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.openSaved(modelData)
+            }
+          }
+
+          Text {
+            anchors.centerIn: parent
+            visible: savedList.count === 0 && !(root.service && root.service.listsError !== "")
+            text: root.t(root.savedTab === 0 ? "noFavorites" : "noHistory")
+            color: root.dim
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+            textFormat: Text.PlainText
+          }
+        }
+      }
+
       Flickable {
         id: scroll
+        visible: !root.savedOpen
         anchors.fill: parent
         contentWidth: width
         contentHeight: column.implicitHeight
@@ -318,6 +468,12 @@ Panel {
                   tooltipText: root.t("copy")
                   foreground: root.contentForeground
                   onClicked: if (root.service) root.service.copyPassage("all")
+                }
+                PanelActionButton {
+                  iconText: "\u{F0E16}"
+                  tooltipText: root.t("savedAyahs")
+                  foreground: root.savedOpen ? Commons.Color.accent : root.contentForeground
+                  onClicked: root.toggleSaved()
                 }
                 PanelActionButton {
                   iconText: "\u{F0493}"
@@ -395,6 +551,15 @@ Panel {
                 enabled: !parent.edges.last && !parent.busy
                 opacity: enabled ? 1 : 0.35
                 onClicked: if (root.service) root.service.stepAyah(1)
+              }
+              PanelActionButton {
+                readonly property bool fav: root.service ? root.service.shownIsFavorite === true : false
+                iconText: fav ? "\u{F04CE}" : "\u{F04D2}"
+                tooltipText: root.t(fav ? "unfavorite" : "favorite")
+                foreground: fav ? Commons.Color.accent : root.contentForeground
+                enabled: root.ayah !== null && root.ayah !== undefined && !(root.service && root.service.listsBusy)
+                opacity: enabled ? 1 : 0.35
+                onClicked: if (root.service) root.service.toggleFavorite()
               }
               PanelActionButton {
                 visible: root.service && root.service.viewedAyah !== null

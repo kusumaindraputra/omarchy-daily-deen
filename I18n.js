@@ -47,7 +47,15 @@ var STRINGS = {
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
     classMaudu: "Fabricated", classUnknown: "Ungraded",
     prevAyah: "Previous ayah", nextAyah: "Next ayah",
-    backToToday: "Back to today's ayah"
+    backToToday: "Back to today's ayah",
+    favorite: "Add to favorites",
+    unfavorite: "Remove from favorites",
+    favorites: "Favorites",
+    history: "History",
+    savedAyahs: "Saved ayahs",
+    noFavorites: "No favorites yet. Press the star on an ayah to save it.",
+    noHistory: "Nothing viewed yet",
+    listsFailed: "Couldn't load the list"
   },
 
   id: {
@@ -82,7 +90,15 @@ var STRINGS = {
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
     classMaudu: "Maudu'", classUnknown: "Tanpa penilaian",
     prevAyah: "Ayat sebelumnya", nextAyah: "Ayat berikutnya",
-    backToToday: "Kembali ke ayat hari ini"
+    backToToday: "Kembali ke ayat hari ini",
+    favorite: "Tambah ke favorit",
+    unfavorite: "Hapus dari favorit",
+    favorites: "Favorit",
+    history: "Riwayat",
+    savedAyahs: "Ayat tersimpan",
+    noFavorites: "Belum ada favorit. Tekan bintang pada ayat untuk menyimpannya.",
+    noHistory: "Belum ada yang dilihat",
+    listsFailed: "Gagal memuat daftar"
   },
 
   ms: {
@@ -117,7 +133,15 @@ var STRINGS = {
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
     classMaudu: "Maudhu'", classUnknown: "Tanpa penilaian",
     prevAyah: "Ayat sebelumnya", nextAyah: "Ayat seterusnya",
-    backToToday: "Kembali ke ayat hari ini"
+    backToToday: "Kembali ke ayat hari ini",
+    favorite: "Tambah ke kegemaran",
+    unfavorite: "Buang daripada kegemaran",
+    favorites: "Kegemaran",
+    history: "Sejarah",
+    savedAyahs: "Ayat disimpan",
+    noFavorites: "Belum ada kegemaran. Tekan bintang pada ayat untuk menyimpannya.",
+    noHistory: "Belum ada yang dilihat",
+    listsFailed: "Gagal memuatkan senarai"
   },
 
   ar: {
@@ -152,7 +176,15 @@ var STRINGS = {
     classSahih: "صحيح", classHasan: "حسن", classDaif: "ضعيف",
     classMaudu: "موضوع", classUnknown: "بلا درجة",
     prevAyah: "الآية السابقة", nextAyah: "الآية التالية",
-    backToToday: "العودة إلى آية اليوم"
+    backToToday: "العودة إلى آية اليوم",
+    favorite: "إضافة إلى المفضلة",
+    unfavorite: "إزالة من المفضلة",
+    favorites: "المفضلة",
+    history: "السجل",
+    savedAyahs: "الآيات المحفوظة",
+    noFavorites: "لا توجد مفضلات بعد. اضغط على النجمة في آية لحفظها.",
+    noHistory: "لم يُعرض شيء بعد",
+    listsFailed: "تعذّر تحميل القائمة"
   },
 
   tr: {
@@ -187,7 +219,15 @@ var STRINGS = {
     classSahih: "Sahih", classHasan: "Hasen", classDaif: "Zayıf",
     classMaudu: "Mevzu", classUnknown: "Derecesiz",
     prevAyah: "Önceki ayet", nextAyah: "Sonraki ayet",
-    backToToday: "Bugünün ayetine dön"
+    backToToday: "Bugünün ayetine dön",
+    favorite: "Favorilere ekle",
+    unfavorite: "Favorilerden çıkar",
+    favorites: "Favoriler",
+    history: "Geçmiş",
+    savedAyahs: "Kayıtlı ayetler",
+    noFavorites: "Henüz favori yok. Kaydetmek için ayetteki yıldıza bas.",
+    noHistory: "Henüz bakılan yok",
+    listsFailed: "Liste yüklenemedi"
   },
 
   ur: {
@@ -222,7 +262,15 @@ var STRINGS = {
     classSahih: "صحیح", classHasan: "حسن", classDaif: "ضعیف",
     classMaudu: "موضوع", classUnknown: "بلا درجہ",
     prevAyah: "پچھلی آیت", nextAyah: "اگلی آیت",
-    backToToday: "آج کی آیت پر واپس"
+    backToToday: "آج کی آیت پر واپس",
+    favorite: "پسندیدہ میں شامل کریں",
+    unfavorite: "پسندیدہ سے ہٹائیں",
+    favorites: "پسندیدہ",
+    history: "تاریخ",
+    savedAyahs: "محفوظ آیات",
+    noFavorites: "ابھی کوئی پسندیدہ نہیں۔ آیت کو محفوظ کرنے کے لیے ستارے پر دبائیں۔",
+    noHistory: "ابھی کچھ نہیں دیکھا گیا",
+    listsFailed: "فہرست لوڈ نہیں ہو سکی"
   },
 
   bn: {
@@ -257,7 +305,15 @@ var STRINGS = {
     classSahih: "সহিহ", classHasan: "হাসান", classDaif: "দুর্বল",
     classMaudu: "জাল", classUnknown: "মানহীন",
     prevAyah: "আগের আয়াত", nextAyah: "পরের আয়াত",
-    backToToday: "আজকের আয়াতে ফিরুন"
+    backToToday: "আজকের আয়াতে ফিরুন",
+    favorite: "প্রিয়তে যোগ করুন",
+    unfavorite: "প্রিয় থেকে সরান",
+    favorites: "প্রিয়",
+    history: "ইতিহাস",
+    savedAyahs: "সংরক্ষিত আয়াত",
+    noFavorites: "এখনও কোনো প্রিয় নেই। সংরক্ষণ করতে আয়াতের তারায় চাপুন।",
+    noHistory: "এখনও কিছু দেখা হয়নি",
+    listsFailed: "তালিকা লোড করা যায়নি"
   },
 
   fr: {
@@ -292,7 +348,15 @@ var STRINGS = {
     classSahih: "Sahih", classHasan: "Hasan", classDaif: "Da'if",
     classMaudu: "Forgé", classUnknown: "Non jugé",
     prevAyah: "Verset précédent", nextAyah: "Verset suivant",
-    backToToday: "Retour au verset du jour"
+    backToToday: "Retour au verset du jour",
+    favorite: "Ajouter aux favoris",
+    unfavorite: "Retirer des favoris",
+    favorites: "Favoris",
+    history: "Historique",
+    savedAyahs: "Versets enregistrés",
+    noFavorites: "Aucun favori. Appuyez sur l'étoile d'un verset pour l'enregistrer.",
+    noHistory: "Rien de consulté pour l'instant",
+    listsFailed: "Impossible de charger la liste"
   },
 
   ru: {
@@ -327,7 +391,15 @@ var STRINGS = {
     classSahih: "Сахих", classHasan: "Хасан", classDaif: "Даиф",
     classMaudu: "Вымышленный", classUnknown: "Без оценки",
     prevAyah: "Предыдущий аят", nextAyah: "Следующий аят",
-    backToToday: "Назад к аяту дня"
+    backToToday: "Назад к аяту дня",
+    favorite: "Добавить в избранное",
+    unfavorite: "Убрать из избранного",
+    favorites: "Избранное",
+    history: "История",
+    savedAyahs: "Сохранённые аяты",
+    noFavorites: "Избранного пока нет. Нажмите на звезду у аята, чтобы сохранить.",
+    noHistory: "Пока ничего не просмотрено",
+    listsFailed: "Не удалось загрузить список"
   }
 }
 

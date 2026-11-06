@@ -343,3 +343,106 @@ test("stepArgs refuses any delta other than 1 or -1", () => {
     assert.equal(Model.stepArgs("h", {}, AY, d), null)
   }
 })
+
+// ---- favorites and history ----
+
+test("parseLists normalises entries and drops anything that is not a reference", () => {
+  const raw = JSON.stringify({
+    favorites: [
+      { surah: 11, ayah: 103, name: "Hud", at: 5 },
+      { surah: 0, ayah: 1 }, { surah: 1, ayah: 0 }, { surah: 1.5, ayah: 2 },
+      { surah: "2", ayah: 3 }, { surah: 2 }, null, "x", 7, [1, 2],
+      { surah: 2, ayah: 255, name: null, at: "soon", extra: "ignored" }
+    ],
+    history: [{ surah: 1, ayah: 1, name: 5, at: 1.5 }]
+  })
+  assert.deepEqual(Model.parseLists(raw), {
+    favorites: [
+      { surah: 11, ayah: 103, name: "Hud", at: 5 },
+      { surah: 2, ayah: 255, name: "", at: 0 }
+    ],
+    history: [{ surah: 1, ayah: 1, name: "5", at: 0 }]
+  })
+})
+
+test("parseLists never throws and falls back to empty lists", () => {
+  const empty = { favorites: [], history: [] }
+  for (const raw of [undefined, null, "", "{", "null", "[]", "42", "\"s\"", {}, 5,
+    '{"favorites":{"a":1},"history":"x"}', '{"favorites":null}']) {
+    assert.deepEqual(Model.parseLists(raw), empty)
+  }
+  assert.deepEqual(Model.parseLists('{"favorites":[{"surah":1,"ayah":1}]}').history, [])
+})
+
+test("parseLists strips control and bidi characters and truncates names to 60", () => {
+  const name = "Al‮Baq\u0000ara\n<b>x</b>‏"
+  const out = Model.parseLists(JSON.stringify({ favorites: [{ surah: 2, ayah: 1, name }] }))
+  assert.ok(!/[\u0000-\u001f​-‏‪-‮<>]/.test(out.favorites[0].name.replace(/‮/g, "")))
+  assert.ok(!out.favorites[0].name.includes("<"))
+  const long = Model.parseLists(JSON.stringify({ favorites: [{ surah: 2, ayah: 1, name: "a".repeat(200) }] }))
+  assert.equal(long.favorites[0].name.length, 60)
+})
+
+test("parseLists caps favorites at 500 and history at 50", () => {
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({ surah: 1, ayah: i + 1 }))
+  const out = Model.parseLists(JSON.stringify({ favorites: mk(600), history: mk(80) }))
+  assert.equal(out.favorites.length, 500)
+  assert.equal(out.history.length, 50)
+  assert.equal(out.favorites[0].ayah, 1)
+})
+
+test("isFavorite matches on surah and ayah only", () => {
+  const favs = [{ surah: 2, ayah: 5, name: "x", at: 0 }, null, { surah: 3, ayah: 1 }]
+  assert.equal(Model.isFavorite(favs, { surah: 2, ayah: 5, text: "t" }), true)
+  assert.equal(Model.isFavorite(favs, { surah: 3, ayah: 1 }), true)
+  assert.equal(Model.isFavorite(favs, { surah: 2, ayah: 6 }), false)
+  assert.equal(Model.isFavorite(favs, { surah: "2", ayah: 5 }), false)
+  for (const bad of [null, undefined, 5, "x", {}, { surah: 2 }]) assert.equal(Model.isFavorite(favs, bad), false)
+  for (const bad of [null, undefined, "x", {}]) assert.equal(Model.isFavorite(bad, { surah: 2, ayah: 5 }), false)
+})
+
+test("listLabel puts the name before surah:ayah", () => {
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "Hud" }), "Hud 11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "" }), "11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103 }), "11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "  \u0000 " }), "11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "A‮B<" }).includes("<"), false)
+  for (const bad of [null, undefined, "x", 3, {}, { surah: 0, ayah: 1 }, { surah: 1 }]) assert.equal(Model.listLabel(bad), "")
+})
+
+test("listsArgs is the helper and the lists verb", () => {
+  assert.deepEqual(Model.listsArgs("h"), ["h", "lists"])
+})
+
+test("favoriteArgs builds fav-toggle with the cleaned, truncated name", () => {
+  assert.deepEqual(Model.favoriteArgs("h", { surah: 11, ayah: 103, surahEnglish: "Hud" }),
+    ["h", "fav-toggle", "--surah", "11", "--ayah", "103", "--name", "Hud"])
+  assert.deepEqual(Model.favoriteArgs("h", { surah: 1, ayah: 1 }).slice(-2), ["--name", ""])
+  assert.deepEqual(Model.favoriteArgs("h", { surah: 1, ayah: 1, surahEnglish: null }).slice(-2), ["--name", ""])
+  const dirty = Model.favoriteArgs("h", { surah: 1, ayah: 1, surahEnglish: "A‮\nB<x>" })
+  assert.ok(!/[\u0000-\u001f​-‏<>]/.test(dirty[7]))
+  assert.equal(Model.favoriteArgs("h", { surah: 1, ayah: 1, surahEnglish: "z".repeat(99) })[7].length, 60)
+  assert.ok(dirty.every((a) => typeof a === "string"))
+})
+
+test("favoriteArgs refuses an ayah without a real reference", () => {
+  for (const bad of [null, undefined, "x", 5, {}, { surah: 0, ayah: 1 }, { surah: 1, ayah: 0 },
+    { surah: "1", ayah: 1 }, { surah: 1.5, ayah: 1 }, { surah: 1 }, { surah: -1, ayah: 1 }]) {
+    assert.equal(Model.favoriteArgs("h", bad), null)
+  }
+})
+
+test("jumpArgs is stepArgs without --step", () => {
+  assert.deepEqual(Model.jumpArgs("h", {}, 2, 255),
+    ["h", "show", "--quran", "ara-quranuthmanihaf", "--quran-translation", "eng-abdelhaleem", "--surah", "2", "--ayah", "255"])
+  assert.deepEqual(Model.jumpArgs("h", { quranEdition: "ind-x", quranTranslationEdition: "ind-y" }, 1, 1),
+    ["h", "show", "--quran", "ind-x", "--quran-translation", "ind-y", "--surah", "1", "--ayah", "1"])
+  assert.equal(Model.jumpArgs("h", null, 3, 4).length, 10)
+  assert.ok(!Model.jumpArgs("h", null, 3, 4).includes("--step"))
+})
+
+test("jumpArgs refuses non-integer or non-positive references", () => {
+  for (const [s, a] of [[0, 1], [1, 0], [1.5, 1], ["1", 1], [1, "1"], [null, 1], [1, undefined], [-1, 1], [NaN, 1]]) {
+    assert.equal(Model.jumpArgs("h", {}, s, a), null)
+  }
+})

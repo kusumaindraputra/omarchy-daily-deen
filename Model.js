@@ -442,6 +442,83 @@ function stepArgs(helper, settings, ayah, delta) {
     "--step", String(delta)]
 }
 
+// Favorites and history hold references only (surah, ayah, a surah name), never
+// text. Whatever the helper hands back is re-validated here.
+var MAX_FAVORITES = 500
+var MAX_HISTORY = 50
+
+function isPosInt(n) { return typeof n === "number" && Number.isInteger(n) && n >= 1 }
+
+function shortName(value) {
+  var name = safeDisplayText(value === undefined || value === null ? "" : String(value))
+  return name.length > 60 ? name.slice(0, 60).trim() : name
+}
+
+function parseEntries(list, cap) {
+  var out = []
+  if (!Array.isArray(list)) return out
+  for (var i = 0; i < list.length && out.length < cap; i++) {
+    var e = list[i]
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue
+    if (!isPosInt(e.surah) || !isPosInt(e.ayah)) continue
+    out.push({
+      surah: e.surah, ayah: e.ayah, name: shortName(e.name),
+      at: typeof e.at === "number" && Number.isInteger(e.at) ? e.at : 0
+    })
+  }
+  return out
+}
+
+function parseLists(raw) {
+  var data = null
+  try { data = typeof raw === "string" ? JSON.parse(raw) : null } catch (e) { data = null }
+  if (!data || typeof data !== "object" || Array.isArray(data)) data = {}
+  return {
+    favorites: parseEntries(data.favorites, MAX_FAVORITES),
+    history: parseEntries(data.history, MAX_HISTORY)
+  }
+}
+
+function isFavorite(favorites, ayah) {
+  if (!Array.isArray(favorites) || !ayah || typeof ayah !== "object") return false
+  if (!isPosInt(ayah.surah) || !isPosInt(ayah.ayah)) return false
+  for (var i = 0; i < favorites.length; i++) {
+    var f = favorites[i]
+    if (f && typeof f === "object" && f.surah === ayah.surah && f.ayah === ayah.ayah) return true
+  }
+  return false
+}
+
+function listLabel(entry) {
+  if (!entry || typeof entry !== "object") return ""
+  if (!isPosInt(entry.surah) || !isPosInt(entry.ayah)) return ""
+  var name = shortName(entry.name)
+  var ref = entry.surah + ":" + entry.ayah
+  return name ? name + " " + ref : ref
+}
+
+function listsArgs(helper) { return [helper, "lists"] }
+
+function favoriteArgs(helper, ayah) {
+  if (!ayah || typeof ayah !== "object" || !isPosInt(ayah.surah) || !isPosInt(ayah.ayah)) return null
+  return [helper, "fav-toggle", "--surah", String(ayah.surah), "--ayah", String(ayah.ayah),
+    "--name", shortName(ayah.surahEnglish)]
+}
+
+// Like stepArgs without --step: show exactly this ayah, from cache only.
+function jumpArgs(helper, settings, surah, ayah) {
+  if (!isPosInt(surah) || !isPosInt(ayah)) return null
+  function get(k, fallback) {
+    var v = settings ? settings[k] : undefined
+    return v === undefined || v === null ? fallback : v
+  }
+  return [helper, "show",
+    "--quran", String(get("quranEdition", "ara-quranuthmanihaf")),
+    "--quran-translation", String(get("quranTranslationEdition", "eng-abdelhaleem")),
+    "--surah", String(surah),
+    "--ayah", String(ayah)]
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     PLUGIN_ID: PLUGIN_ID,
@@ -459,6 +536,8 @@ if (typeof module !== "undefined" && module.exports) {
     formatCopy: formatCopy,
     barLabel: barLabel, tooltipText: tooltipText,
     cacheDir: cacheDir, stateDir: stateDir, pickArgs: pickArgs,
-    withViewedAyah: withViewedAyah, ayahEdges: ayahEdges, stepArgs: stepArgs
+    withViewedAyah: withViewedAyah, ayahEdges: ayahEdges, stepArgs: stepArgs,
+    parseLists: parseLists, isFavorite: isFavorite, listLabel: listLabel,
+    listsArgs: listsArgs, favoriteArgs: favoriteArgs, jumpArgs: jumpArgs
   }
 }

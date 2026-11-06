@@ -16,7 +16,7 @@ grab() {
     on { print; d += gsub(/{/, "{") - gsub(/}/, "}"); if (d == 0) exit }' "$SRC"
 }
 FNS=""
-for f in stepAyah stepPart stepFinished resetView adopt; do
+for f in stepAyah runShow stepPart stepFinished resetView adopt; do
   body="$(grab $f)"
   [[ -n "$body" ]] || { echo "FAIL  $f not found in $SRC"; exit 1; }
   FNS+="$body"$'\n'
@@ -51,6 +51,7 @@ Item {
   signal rotated()
   onRotated: rotations++
   function notify() {}
+  function refreshLists() {}
   property string helperPath: "/h"
   property var settings: ({})
   QtObject { id: stepProc; property bool running: false; property var command: [] }
