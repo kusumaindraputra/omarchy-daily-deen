@@ -396,6 +396,8 @@ test("isFavorite matches on surah and ayah only", () => {
   assert.equal(Model.isFavorite(favs, { surah: 2, ayah: 5, text: "t" }), true)
   assert.equal(Model.isFavorite(favs, { surah: 3, ayah: 1 }), true)
   assert.equal(Model.isFavorite(favs, { surah: 2, ayah: 6 }), false)
+  // the same ayah number in another surah is a different ayah
+  assert.equal(Model.isFavorite(favs, { surah: 9, ayah: 5 }), false)
   assert.equal(Model.isFavorite(favs, { surah: "2", ayah: 5 }), false)
   for (const bad of [null, undefined, 5, "x", {}, { surah: 2 }]) assert.equal(Model.isFavorite(favs, bad), false)
   for (const bad of [null, undefined, "x", {}]) assert.equal(Model.isFavorite(bad, { surah: 2, ayah: 5 }), false)
