@@ -64,6 +64,17 @@ Item {
   property var current: Model.defaultState()
   property var catalog: null
   property string lastError: ""
+
+  // The last pick exited non-zero. With no cache that leaves nothing to show,
+  // and the state file missing is what normally triggers a first pick — so
+  // without this flag a failed pick re-reads the file, finds it missing, picks
+  // again, and spins for as long as the network is down. While it is set,
+  // only the minute tick or a person pressing retry starts another attempt.
+  property bool pickFailed: false
+
+  // What the panel shows instead of "nothing loaded yet": the helper ran, came
+  // back with nothing, and said why.
+  readonly property bool failed: !busy && !hasContent && lastError !== ""
   property bool busy: false
   property bool syncing: false
 
@@ -133,6 +144,7 @@ Item {
 
   function rotate(force) {
     if (!ready) return
+    if (force === true) pickFailed = false
     if (busy) {
       if (force === true) pendingForce = true
       return
@@ -168,6 +180,7 @@ Item {
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.lastError = String(text || "").trim() }
     onExited: function(code) {
       root.busy = false
+      root.pickFailed = code !== 0
       if (code !== 0 && !root.hasContent) stateFile.reload()
       if (root.pendingForce) {
         root.pendingForce = false
@@ -215,7 +228,7 @@ Item {
       // No state file yet: pick the first passage, but stay unprimed so the
       // very first one arrives quietly.
       root.primed = false
-      root.rotate(false)
+      if (!root.pickFailed) root.rotate(false)
     }
   }
 
@@ -331,6 +344,8 @@ Item {
       out.serviceReady = root.ready
       out.servicePrimed = root.primed
       out.serviceBusy = root.busy
+      out.serviceFailed = root.failed
+      out.lastError = root.lastError
       return JSON.stringify(out)
     }
     function next(): string { root.rotate(true); return "ok" }

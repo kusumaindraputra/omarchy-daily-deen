@@ -286,9 +286,10 @@ Panel {
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             title: root.t("title")
-            meta: root.remainingMs > 0
-              ? root.t("nextIn") + " " + Model.formatDuration(root.remainingMs)
-              : root.t("rotateNow")
+            meta: !Model.hasContent(root.current) ? ""
+              : root.remainingMs > 0
+                ? root.t("nextIn") + " " + Model.formatDuration(root.remainingMs)
+                : root.t("rotateNow")
             detail: root.current && root.current.source === "offline" ? root.t("offline") : ""
 
             trailingControl: Component {
@@ -492,15 +493,46 @@ Panel {
             uiFamily: root.contentFontFamily
           }
 
-          Text {
+          Column {
             width: parent.width
+            spacing: Style.spacing.sm
             visible: !Model.hasContent(root.current)
-            text: root.service && root.service.busy ? root.t("loading") : root.t("noContent")
-            color: root.dim
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-            textFormat: Text.PlainText
+
+            Text {
+              width: parent.width
+              text: root.service && root.service.failed ? root.t("fetchFailed")
+                : root.service && root.service.busy ? root.t("loading") : root.t("noContent")
+              color: root.dim
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+            }
+
+            // What the helper actually said, for the person who has to fix it.
+            Text {
+              width: parent.width
+              visible: root.service && root.service.failed && text !== ""
+              text: root.service ? Model.safeDisplayText(root.service.lastError) : ""
+              color: root.dim
+              opacity: 0.7
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+            }
+
+            Button {
+              anchors.horizontalCenter: parent.horizontalCenter
+              visible: root.service && root.service.failed
+              text: root.t("retry")
+              bordered: true
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: if (root.service) root.service.rotate(true)
+            }
           }
 
           // ---- settings

@@ -19,14 +19,28 @@ BarWidget {
 
   readonly property string glyph: "\u{F405}"
 
-  // serviceFor is a plain function, so a binding on bar.shell alone would not
-  // re-evaluate when the service finishes loading — services are created
-  // asynchronously and a widget can be built first. Reading _services is what
-  // creates the dependency.
-  readonly property var service: {
-    if (!bar || !bar.shell) return null
-    var _revision = bar.shell._services
-    return bar.shell.serviceFor(root.moduleName)
+  // Looked up rather than bound. serviceFor() is a plain function, so nothing
+  // re-evaluates it when a service finishes loading, and reading
+  // bar.shell._services — which this once did to create that dependency —
+  // reads nothing at all: a plugin's bar.shell is a scoped PluginShellApi, and
+  // _services lives only on the host's own ShellRoot. A widget built before
+  // its service would have kept a null here for good. So ask again until the
+  // answer is non-null; the host never hands a service back and then takes it
+  // away without rebuilding the widget.
+  property var service: null
+
+  function resolveService() {
+    if (!bar || !bar.shell || typeof bar.shell.serviceFor !== "function") return
+    var found = bar.shell.serviceFor(root.moduleName)
+    if (found && found !== root.service) root.service = found
+  }
+
+  Timer {
+    interval: 500
+    repeat: true
+    running: root.service === null
+    triggeredOnStart: true
+    onTriggered: root.resolveService()
   }
 
   readonly property string locale: service ? service.locale : "en"
@@ -77,7 +91,7 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onBarChanged: injectPanel()
+  onBarChanged: { injectPanel(); resolveService() }
   onSettingsChanged: { injectPanel(); feedService() }
   onServiceChanged: { injectPanel(); feedService() }
 
