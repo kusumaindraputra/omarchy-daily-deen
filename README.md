@@ -187,7 +187,13 @@ With the panel open:
 - **Esc** closes it
 - **n** shows another passage (the same as `next` over IPC)
 - **s** opens and closes the settings
+- **c** copies the ayah and hadith on show to the clipboard (the copy button in the
+  panel header does the same)
 - **Tab** / **Shift+Tab** move to the next or previous panel
+
+Copying needs `wl-clipboard` (`wl-copy`), an optional dependency; without it the button
+shows a failure message. The copied text also lands in Omarchy's clipboard history if a
+clipboard-history plugin is active.
 
 While one of the settings pickers is open, every key goes to the picker instead —
 Esc closes the list rather than the panel — so typing in its search field filters

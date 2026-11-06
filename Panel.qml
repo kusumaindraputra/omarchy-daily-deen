@@ -262,6 +262,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(key) {
         if (key === "n" || key === "N") { if (root.service) root.service.rotate(true) }
+        else if (key === "c" || key === "C") { if (root.service) root.service.copyPassage("all") }
         else if (key === "s" || key === "S") root.settingsOpen = !root.settingsOpen
       }
 
@@ -290,7 +291,9 @@ Panel {
               : root.remainingMs > 0
                 ? root.t("nextIn") + " " + Model.formatDuration(root.remainingMs)
                 : root.t("rotateNow")
-            detail: root.current && root.current.source === "offline" ? root.t("offline") : ""
+            detail: root.service && root.service.copyFailed ? root.t("copyFailed")
+              : root.service && root.service.copied ? root.t("copied")
+              : root.current && root.current.source === "offline" ? root.t("offline") : ""
 
             trailingControl: Component {
               Row {
@@ -300,6 +303,14 @@ Panel {
                   tooltipText: root.t("rotateNow")
                   foreground: root.contentForeground
                   onClicked: if (root.service) root.service.rotate(true)
+                }
+                PanelActionButton {
+                  visible: Model.hasContent(root.current)
+                  enabled: visible
+                  iconText: "\u{F018F}"
+                  tooltipText: root.t("copy")
+                  foreground: root.contentForeground
+                  onClicked: if (root.service) root.service.copyPassage("all")
                 }
                 PanelActionButton {
                   iconText: "\u{F0493}"

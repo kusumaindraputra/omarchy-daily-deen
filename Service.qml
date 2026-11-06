@@ -325,6 +325,75 @@ Item {
     }
   }
 
+  // --- clipboard -----------------------------------------------------------
+
+  property bool copied: false
+  property bool copyFailed: false
+  // True from the moment a copy starts until copyFinished has run once.
+  property bool copyPending: false
+  property string copyText: ""
+
+  Timer { id: copiedTimer; interval: 2000; onTriggered: root.copied = false }
+
+  function copyPassage(which) {
+    if (copyProc.running || copyPending) return
+    var text = Model.formatCopy(root.current, which || "all")
+    if (!text) return
+    copied = false
+    copyFailed = false
+    copiedTimer.stop()
+    copyPending = true
+    copyText = text
+    // No shell: the text comes from a third-party CDN and goes over stdin only.
+    copyProc.command = ["wl-copy"]
+    // Re-armed on every run. onStarted turns it off to send EOF, and turning
+    // off a property that is already off changes nothing — so on the second
+    // copy the pipe was never closed and wl-copy waited on it forever, with
+    // copyPending held true and every later copy silently refused.
+    copyProc.stdinEnabled = true
+    copyWatchdog.restart()
+    copyProc.running = true
+  }
+
+  // Whatever goes wrong with wl-copy, "pending" must not outlive a few seconds:
+  // it is what refuses the next copy.
+  Timer {
+    id: copyWatchdog
+    interval: 5000
+    onTriggered: {
+      if (!root.copyPending) return
+      copyProc.running = false
+      root.copyFinished(-1)
+    }
+  }
+
+  // Idempotent: exited and the not-running fallback may both report one run.
+  function copyFinished(code) {
+    if (!copyPending) return
+    copyPending = false
+    copyWatchdog.stop()
+    copyText = ""
+    if (code === 0) { copied = true; copiedTimer.restart() }
+    else copyFailed = true
+  }
+
+  Process {
+    id: copyProc
+    stdinEnabled: true
+    // wl-copy reads until EOF, then forks into the background to serve the
+    // selection. Switching stdinEnabled off closes the write channel (Qt
+    // flushes the buffered write first), which is the EOF it waits for.
+    onStarted: {
+      write(root.copyText)
+      stdinEnabled = false
+      root.copyText = ""
+    }
+    onExited: function(code) { root.copyFinished(code) }
+    // A binary that cannot be started (wl-clipboard missing) may never emit a
+    // sensible exit code. Deferred so a real exited signal always wins.
+    onRunningChanged: if (!running) Qt.callLater(function() { root.copyFinished(-1) })
+  }
+
   // --- IPC -----------------------------------------------------------------
 
   // `omarchy-shell shell call` only reaches panel/overlay/menu plugins, so a
@@ -346,12 +415,15 @@ Item {
       out.serviceBusy = root.busy
       out.serviceFailed = root.failed
       out.lastError = root.lastError
+      out.copied = root.copied
+      out.copyFailed = root.copyFailed
       return JSON.stringify(out)
     }
     function next(): string { root.rotate(true); return "ok" }
     function refresh(): string { root.rotate(false); return "ok" }
     function sync(): string { root.sync(); return "ok" }
     function catalog(): string { root.refreshCatalog(); return "ok" }
+    function copy(which: string): string { root.copyPassage(which); return "ok" }
   }
 
   onShellChanged: if (shell) Qt.callLater(function() { stateFile.reload(); catalogFile.reload() })

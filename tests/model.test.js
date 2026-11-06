@@ -216,3 +216,67 @@ test("an ungraded collection produces no badges rather than an empty one", () =>
   assert.equal(Grades.isImplicitlySahih("bukhari"), true)
   assert.equal(Grades.isImplicitlySahih("abudawud"), false)
 })
+
+const COPY_STATE = {
+  ayah: { text: "بِسْمِ ٱللَّهِ", translation: "In the name of God", translationAuthor: "Abdel Haleem",
+          surah: 1, ayah: 1, surahName: "Al-Fatiha", surahEnglish: "The Opening" },
+  hadith: { arabicText: "إنما الأعمال بالنيات", text: "Deeds are by intentions.", collectionName: "Sahih al Bukhari",
+            number: 1, authority: "Al-Albani",
+            grades: [{ name: "Zubair Ali Zai", grade: "Hasan" }, { name: "Al-Albani", grade: "Sahih" }] }
+}
+
+test("formatCopy ayah gives Arabic, translation and a reference line", () => {
+  assert.equal(Model.formatCopy(COPY_STATE, "ayah"),
+    "بِسْمِ ٱللَّهِ\n\nIn the name of God\n\n— Al-Fatiha 1:1 · Abdel Haleem")
+})
+
+test("formatCopy hadith gives Arabic, text, reference and the grade of the chosen authority", () => {
+  assert.equal(Model.formatCopy(COPY_STATE, "hadith"),
+    "إنما الأعمال بالنيات\n\nDeeds are by intentions.\n\n— Sahih al Bukhari 1 · Sahih (Al-Albani)")
+})
+
+test("formatCopy all joins ayah and hadith, and unknown values mean all", () => {
+  const all = Model.formatCopy(COPY_STATE, "all")
+  assert.equal(all, Model.formatCopy(COPY_STATE, "ayah") + "\n\n" + Model.formatCopy(COPY_STATE, "hadith"))
+  assert.equal(Model.formatCopy(COPY_STATE), all)
+  assert.equal(Model.formatCopy(COPY_STATE, "bogus"), all)
+})
+
+test("formatCopy skips an empty part without a dangling separator", () => {
+  const onlyAyah = { ayah: COPY_STATE.ayah, hadith: null }
+  assert.equal(Model.formatCopy(onlyAyah, "all"), Model.formatCopy(onlyAyah, "ayah"))
+  assert.equal(Model.formatCopy(onlyAyah, "hadith"), "")
+  const onlyHadith = { ayah: { text: "", translation: "" }, hadith: COPY_STATE.hadith }
+  assert.equal(Model.formatCopy(onlyHadith, "all"), Model.formatCopy(COPY_STATE, "hadith"))
+})
+
+test("formatCopy never throws on null, broken or non-string input", () => {
+  for (const bad of [null, undefined, 42, "x", [], {}, { ayah: 5, hadith: "x" }, { ayah: { text: {}, translation: 7 }, hadith: { text: [], grades: "no" } }]) {
+    assert.equal(typeof Model.formatCopy(bad, "all"), "string")
+  }
+  assert.equal(Model.formatCopy(null, "all"), "")
+  assert.equal(Model.formatCopy({ hadith: { text: "ok", number: 3, grades: [null, 5, { grade: "Sahih" }] } }, "hadith").includes("Sahih"), true)
+})
+
+test("formatCopy strips control characters and markup per field", () => {
+  const evil = { ayah: { text: "a\u0000b\nc", translation: "<script>alert(1)</script>hi\u202e", translationAuthor: "x\ty",
+                         surah: 1, ayah: 2, surahName: "<b>Sura</b>" } }
+  const out = Model.formatCopy(evil, "ayah")
+  assert.equal(out, "a b c\n\nscriptalert(1)/scripthi\n\n— bSura/b 1:2 · x y")
+  assert.doesNotMatch(out, /[<>\u0000\u202e]/)
+})
+
+test("formatCopy picks the grade by authority and falls back to the first grade", () => {
+  const h = (authority) => ({ hadith: { text: "t", collectionName: "C", number: 9, authority,
+    grades: [{ name: "A", grade: "Hasan" }, { name: "B", grade: "Sahih" }] } })
+  assert.match(Model.formatCopy(h("B"), "hadith"), /· Sahih \(B\)$/)
+  assert.match(Model.formatCopy(h("nobody"), "hadith"), /· Hasan \(A\)$/)
+  assert.match(Model.formatCopy(h(undefined), "hadith"), /· Hasan \(A\)$/)
+  assert.doesNotMatch(Model.formatCopy({ hadith: { text: "t", collectionName: "C", number: 9, grades: [] } }, "hadith"), /·/)
+})
+
+test("formatCopy for a hadith without Arabic has no blank first line or doubled blank lines", () => {
+  const out = Model.formatCopy({ hadith: { text: "Deeds.", collectionName: "C", number: 2 } }, "hadith")
+  assert.equal(out, "Deeds.\n\n— C 2")
+  assert.doesNotMatch(out, /\n\n\n/)
+})

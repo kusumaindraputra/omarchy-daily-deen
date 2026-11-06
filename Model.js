@@ -276,6 +276,72 @@ function hadithReference(state) {
   return name + " " + h.number
 }
 
+// Plain text for the clipboard. Every field is cleaned on its own and the blank
+// lines between parts are made here, so nothing from the CDN can add structure.
+// Bidi embedding/override/isolate controls would reorder text in whatever the
+// clipboard is pasted into, so they go too.
+var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/g
+
+function cleanFields(obj, keys) {
+  var out = {}
+  for (var i = 0; i < keys.length; i++) {
+    var v = obj[keys[i]]
+    out[keys[i]] = safeDisplayText(typeof v === "string" ? v.replace(BIDI_CHARS, "") : v)
+  }
+  return out
+}
+
+function copyAyah(state) {
+  var a = state && typeof state === "object" ? state.ayah : null
+  if (!a || typeof a !== "object") return ""
+  var f = cleanFields(a, ["text", "translation", "translationAuthor", "surahName", "surahEnglish", "surah", "ayah"])
+  if (!f.text && !f.translation) return ""
+  var ref = ayahReference({ ayah: f })
+  var parts = []
+  if (f.text) parts.push(f.text)
+  if (f.translation) parts.push(f.translation)
+  var tail = "— " + ref + (f.translationAuthor ? " · " + f.translationAuthor : "")
+  parts.push(tail)
+  return parts.join("\n\n")
+}
+
+function copyHadith(state) {
+  var h = state && typeof state === "object" ? state.hadith : null
+  if (!h || typeof h !== "object") return ""
+  var f = cleanFields(h, ["arabicText", "text", "collectionName", "book", "edition", "number", "authority"])
+  if (!f.arabicText && !f.text) return ""
+  var ref = hadithReference({ hadith: f })
+  var tail = "— " + ref
+  var grades = Array.isArray(h.grades) ? h.grades : []
+  var pick = null
+  for (var i = 0; i < grades.length && !pick; i++) {
+    var g = grades[i]
+    if (g && typeof g === "object" && f.authority && safeDisplayText(g.name) === f.authority && safeDisplayText(g.grade)) pick = g
+  }
+  for (var j = 0; j < grades.length && !pick; j++) {
+    var g0 = grades[j]
+    if (g0 && typeof g0 === "object" && safeDisplayText(g0.grade)) pick = g0
+  }
+  if (pick) {
+    var name = safeDisplayText(pick.name)
+    tail += " · " + safeDisplayText(pick.grade) + (name ? " (" + name + ")" : "")
+  }
+  var parts = []
+  if (f.arabicText) parts.push(f.arabicText)
+  if (f.text) parts.push(f.text)
+  parts.push(tail)
+  return parts.join("\n\n")
+}
+
+function formatCopy(state, which) {
+  var ayah = which === "hadith" ? "" : copyAyah(state)
+  var hadith = which === "ayah" ? "" : copyHadith(state)
+  var out = []
+  if (ayah) out.push(ayah)
+  if (hadith) out.push(hadith)
+  return out.join("\n\n")
+}
+
 // The bar is 26px tall. Arabic never goes in it, and neither does a paragraph:
 // a glyph, optionally a short reference, is all that fits honestly.
 function barLabel(state, mode) {
@@ -347,6 +413,7 @@ if (typeof module !== "undefined" && module.exports) {
     fontsFor: fontsFor, pickFamily: pickFamily, familyFor: familyFor,
     lineHeightFor: lineHeightFor,
     ayahReference: ayahReference, hadithReference: hadithReference,
+    formatCopy: formatCopy,
     barLabel: barLabel, tooltipText: tooltipText,
     cacheDir: cacheDir, stateDir: stateDir, pickArgs: pickArgs
   }
