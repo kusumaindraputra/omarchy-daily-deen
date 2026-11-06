@@ -146,6 +146,8 @@ $XDG_CACHE_HOME/omarchy-daily-deen/
 $XDG_STATE_HOME/omarchy-daily-deen/
   current.json          the passage on screen, and when it was chosen
   seen.json             recent picks, to avoid immediate repeats in random mode
+  favorites.json        starred ayahs: surah:ayah and a surah name, no text
+  history.json          recently viewed ayahs, same shape, no text
 ```
 
 The cache is regenerable and safe to delete. The index is what makes the offline mode
@@ -163,6 +165,8 @@ bin/deen-fetch catalog                       # refresh the edition lists
 bin/deen-fetch sync --hadith ind-abudawud    # download and index
 bin/deen-fetch pick --force …                # choose a new passage now
 bin/deen-fetch status                        # what is on screen
+bin/deen-fetch lists                         # favorites and history, as JSON
+bin/deen-fetch fav-toggle --surah 2 --ayah 255 --name "Al-Baqara"   # star or unstar an ayah
 ```
 
 Over IPC:
@@ -179,6 +183,76 @@ A Hyprland keybind, in `~/.config/hypr/bindings.lua`:
 ```lua
 o.bind("SUPER + SHIFT + Q", "Daily ayah", "omarchy-shell shell toggle io.github.kusumaindraputra.daily-deen")
 ```
+
+## Keyboard
+
+With the panel open:
+
+- **Esc** closes it
+- **n** shows another passage (the same as `next` over IPC)
+- **s** opens and closes the settings
+- **c** copies the ayah and hadith on show to the clipboard (the copy button in the
+  panel header does the same)
+- **←** / **→** (or **h** / **l**) show the previous or next ayah; **↑** / **↓** scroll the panel
+- **f** toggles the favorite star on the ayah on show (the star button does the same)
+- **b** opens the saved list, with a favorites tab and a history tab
+- **Tab** / **Shift+Tab** move to the next or previous panel
+
+The ayah arrows only change what is *shown*. They do not touch the rotation or the
+current pick, and the panel returns to today's ayah at the next rotation or with the
+"back" button. Stepping is served by `deen-fetch show` from the cache alone, so the
+edition must already be cached; it never downloads.
+
+Clicking a row in the saved list shows that ayah the same way the arrows do: view-only,
+served from the cache, so the edition must already be cached. Favorites and history are
+kept in `favorites.json` and `history.json` in the state directory. They hold only
+`surah:ayah` references and a surah name, never any ayah text. They are removed along
+with the rest of the state directory (see Remove).
+
+Copying needs `wl-clipboard` (`wl-copy`), an optional dependency; without it the button
+shows a failure message. The copied text also lands in Omarchy's clipboard history if a
+clipboard-history plugin is active.
+
+While one of the settings pickers is open, every key goes to the picker instead —
+Esc closes the list rather than the panel — so typing in its search field filters
+the list and does not also rotate the passage behind it.
+
+## Troubleshooting
+
+**The panel won't close, or the keyboard seems stuck.** Omarchy 4.0.6 exposes the
+bar's `centerHoverRevealSuppressed` flag as read-only; assigning to it threw a
+`TypeError` that left the panel holding the keyboard. The panel now closes even when
+the bar refuses the flag. If something similar happens, `omarchy restart shell`, then
+look for the cause with `journalctl --user -b | grep daily-deen`.
+
+**Changing a setting or the language does nothing.** Third-party plugins get a
+`PluginShellApi` that has no `shellConfig`, so settings have to be read from the
+plugin's own entry in Omarchy's plugin settings. Older versions looked in the wrong
+place and always saw the defaults. Check what the service actually sees:
+
+```bash
+omarchy-shell io.github.kusumaindraputra.daily-deen status
+```
+
+Besides the current pick, it reports `serviceReady`, `servicePrimed`, `serviceBusy`,
+`serviceFailed` and `lastError`.
+
+**The panel says "Couldn't reach the servers".** Nothing is cached yet and the CDN
+couldn't be reached, so there is nothing to show. Check your connection, then press
+**Try again**, or run the helper yourself to see the real error:
+
+```bash
+bin/deen-fetch catalog --force
+```
+
+Until a pick succeeds the plugin does not retry in a loop; it tries again once a
+minute, or when you press the button. Once something is cached it works offline.
+
+**The panel still behaves as it did before `bin/dev-sync`.** Hot reload can keep
+serving the previous compilation; `omarchy restart shell` (see [Developing](#developing)).
+
+**Arabic looks ragged.** Almost always missing fonts; see the font requirements under
+[Install](#install).
 
 ## Developing
 

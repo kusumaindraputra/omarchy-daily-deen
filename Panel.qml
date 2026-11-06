@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "Grades.js" as Grades
@@ -29,6 +30,27 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   property bool settingsOpen: false
+  // The saved-ayahs view (favourites and history) replaces the reading view
+  // while it is open. 0 is favourites, 1 is history.
+  property bool savedOpen: false
+  property int savedTab: 0
+  onOpenedChanged: if (!opened) savedOpen = false
+
+  // Newest first. The helper's order is not relied upon.
+  function savedEntries(tab) {
+    var list = service ? (tab === 0 ? service.favorites : service.history) : []
+    return (list || []).slice().sort(function(a, b) { return (b.at || 0) - (a.at || 0) })
+  }
+  function toggleSaved() {
+    savedOpen = !savedOpen
+    // Opening it is a fair moment to look again; nothing else polls.
+    if (savedOpen && service) service.refreshLists()
+  }
+  function openSaved(entry) {
+    if (!entry || !service) return
+    service.jumpTo(entry.surah, entry.ayah)
+    savedOpen = false
+  }
   property int nowTick: Date.now()
 
   // `current` rather than `state`: Item.state is taken.
@@ -37,32 +59,29 @@ Panel {
   readonly property var hadithMeta: service ? service.hadithMeta : null
   readonly property string locale: service ? service.locale : "en"
 
-  // The bar hands a panel its `settings` as a copy and re-pushes it on every
-  // activeItemChanged, which is every time this panel opens. That copy was
-  // observed disagreeing with shell.json and with the service — the pickers
-  // offered English and A. J. Arberry while the ayah rendered in Indonesian —
-  // stale by exactly the most recent change, and only a shell restart cleared
-  // it. What put it out of step is not pinned down: an edit made to shell.json
-  // from outside does reach it. Reading shellConfig removes the question, since
-  // it is reassigned wholesale on every change and so is a binding rather than
-  // a copy; Service.qml reads it for its own reasons and says so.
+  // Where the panel reads its settings from, and why it is not
+  // bar.shell.shellConfig: a third-party plugin's bar.shell is a scoped
+  // PluginShellApi that has no shellConfig, so that read was always undefined,
+  // liveSettings was always {}, and every control showed and wrote defaults.
+  // persist() builds its entry from this, so each change also wiped every
+  // other key — choosing a hadith language erased the translation language.
   //
-  // persist() has to read from here too, and that part is not guesswork:
-  // shell.qml's updateEntryInline builds the entry it writes out of nothing but
-  // the object handed to it, so an entry assembled from a stale copy would put
-  // every key it did not know about back to what it used to be.
+  // The host widget's `settings` is the live one: the bar patches it in place
+  // on every change, and persist() below updates it first so the panel redraws
+  // on the click itself. The copy pushed into this panel is the fallback.
   //
-  // The pushed copy stays as the fallback for a panel with no shell yet.
-  readonly property var liveSettings: (bar && bar.shell)
-    ? Model.entrySettings(bar.shell.shellConfig, moduleName)
-    : settings
+  // persist() has to read from here too: shell.qml's updateEntryInline builds
+  // the entry it writes out of nothing but the object handed to it, so an
+  // entry assembled from a stale copy would put every key it did not know
+  // about back to what it used to be.
+  readonly property var liveSettings: (hostWidget && hostWidget.settings) ? hostWidget.settings : settings
   function cfg(name, fallback) {
     var value = liveSettings ? liveSettings[name] : undefined
     return value === undefined || value === null ? fallback : value
   }
   function t(key) { return I18n.t(locale, key) }
 
-  readonly property var ayah: current ? current.ayah : null
+  readonly property var ayah: service && service.viewedAyah ? service.viewedAyah : (current ? current.ayah : null)
   readonly property var hadith: current ? current.hadith : null
   readonly property bool showArabic: cfg("showArabic", true) === true
 
@@ -70,7 +89,7 @@ Panel {
   // system font list, and there is one of these Texts per passage.
   readonly property var installedFonts: Qt.fontFamilies()
 
-  readonly property color contentForeground: bar ? bar.foreground : Color.foreground
+  readonly property color contentForeground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(contentForeground, 1.5)
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -90,8 +109,11 @@ Panel {
   }
 
   function close() {
-    setCenterHoverRevealSuppressed(false)
+    // Hide first. The reveal flag is cosmetic, and a failure in it once left
+    // the panel impossible to close — with KeyboardPanel's exclusive keyboard
+    // grab still held, which is what made the whole session feel stuck.
     root.controller.hide()
+    setCenterHoverRevealSuppressed(false)
   }
 
   function toggle() { root.opened ? root.close() : root.open() }
@@ -104,9 +126,18 @@ Panel {
 
   // Summoning by hotkey moves no pointer, so a hover the bar was still holding
   // must not keep the centre indicators revealed behind the panel.
+  //
+  // Plugins are handed a PluginBarApi, whose centerHoverRevealSuppressed is
+  // read-only: assigning to it throws. The setter is the supported way in; the
+  // assignment stays only as a fallback for a bar object that has no setter.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
-      root.bar.centerHoverRevealSuppressed = value
+    if (!root.bar) return
+    if (typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if ("centerHoverRevealSuppressed" in root.bar) {
+      // A cosmetic flag must never be able to break the caller.
+      try { root.bar.centerHoverRevealSuppressed = value } catch (e) {}
+    }
   }
 
   Timer {
@@ -240,7 +271,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(520))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight)
+    contentHeight: panel.fittedContentHeight(Math.max(column.implicitHeight, root.savedOpen ? Style.space(360) : 0))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -248,15 +279,152 @@ Panel {
       // A picker's search field owns the keyboard while it is up; without this
       // typing a filter would also drive the panel behind it.
       blocked: root.dropdownOpen
-      onCloseRequested: root.close()
+      // Esc backs out of the saved view first, and closes the panel on the next press.
+      onCloseRequested: { if (root.savedOpen) root.savedOpen = false; else root.close() }
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      onMoveRequested: function(dx, dy) {
+        if (root.savedOpen) {
+          if (dx !== 0) root.savedTab = dx < 0 ? 0 : 1
+          else if (dy !== 0)
+            savedList.contentY = Math.max(0, Math.min(Math.max(0, savedList.contentHeight - savedList.height), savedList.contentY + dy * 80))
+        } else if (dx !== 0) {
+          if (root.service) root.service.stepAyah(dx < 0 ? -1 : 1)
+        } else if (dy !== 0 && scroll.interactive) {
+          scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height, scroll.contentY + dy * 80))
+        }
+      }
       onTextKey: function(key) {
-        if (key === "n" || key === "N") { if (root.service) root.service.rotate(true) }
+        if (key === "b" || key === "B") root.toggleSaved()
+        else if (root.savedOpen) return
+        else if (key === "f" || key === "F") { if (root.service) root.service.toggleFavorite() }
+        else if (key === "n" || key === "N") { if (root.service) root.service.rotate(true) }
+        else if (key === "c" || key === "C") { if (root.service) root.service.copyPassage("all") }
         else if (key === "s" || key === "S") root.settingsOpen = !root.settingsOpen
+      }
+
+      // ---- saved ayahs
+
+      Item {
+        id: savedView
+        anchors.fill: parent
+        visible: root.savedOpen
+
+        Column {
+          id: savedHead
+          width: parent.width
+          spacing: Style.spacing.sm
+
+          Row {
+            spacing: Style.spacing.sm
+            PanelActionButton {
+              iconText: "\u{F0E16}"
+              tooltipText: root.t("savedAyahs")
+              foreground: Commons.Color.accent
+              onClicked: root.savedOpen = false
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.t("savedAyahs")
+              color: root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.body
+              textFormat: Text.PlainText
+            }
+          }
+
+          Row {
+            spacing: Style.spacing.sm
+            Button {
+              text: root.t("favorites")
+              bordered: root.savedTab === 0
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: root.savedTab = 0
+            }
+            Button {
+              text: root.t("history")
+              bordered: root.savedTab === 1
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: root.savedTab = 1
+            }
+          }
+
+          Row {
+            visible: root.service && root.service.listsError !== ""
+            spacing: Style.spacing.sm
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.t("listsFailed")
+              color: root.dim
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              textFormat: Text.PlainText
+            }
+            Button {
+              text: root.t("retry")
+              bordered: true
+              enabled: !(root.service && root.service.listsBusy)
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: if (root.service) root.service.refreshLists()
+            }
+          }
+        }
+
+        ListView {
+          id: savedList
+          anchors.top: savedHead.bottom
+          anchors.topMargin: Style.spacing.sm
+          anchors.bottom: parent.bottom
+          width: parent.width
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          model: root.savedOpen ? root.savedEntries(root.savedTab) : []
+
+          delegate: Rectangle {
+            required property var modelData
+            width: savedList.width
+            height: Style.space(34)
+            radius: Style.space(6)
+            color: rowArea.containsMouse ? Qt.alpha(root.contentForeground, 0.1) : "transparent"
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.sm
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.sm
+              text: Model.listLabel(modelData)
+              color: root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.body
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+            }
+            MouseArea {
+              id: rowArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.openSaved(modelData)
+            }
+          }
+
+          Text {
+            anchors.centerIn: parent
+            visible: savedList.count === 0 && !(root.service && root.service.listsError !== "")
+            text: root.t(root.savedTab === 0 ? "noFavorites" : "noHistory")
+            color: root.dim
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+            textFormat: Text.PlainText
+          }
+        }
       }
 
       Flickable {
         id: scroll
+        visible: !root.savedOpen
         anchors.fill: parent
         contentWidth: width
         contentHeight: column.implicitHeight
@@ -276,10 +444,13 @@ Panel {
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             title: root.t("title")
-            meta: root.remainingMs > 0
-              ? root.t("nextIn") + " " + Model.formatDuration(root.remainingMs)
-              : root.t("rotateNow")
-            detail: root.current && root.current.source === "offline" ? root.t("offline") : ""
+            meta: !Model.hasContent(root.current) ? ""
+              : root.remainingMs > 0
+                ? root.t("nextIn") + " " + Model.formatDuration(root.remainingMs)
+                : root.t("rotateNow")
+            detail: root.service && root.service.copyFailed ? root.t("copyFailed")
+              : root.service && root.service.copied ? root.t("copied")
+              : root.current && root.current.source === "offline" ? root.t("offline") : ""
 
             trailingControl: Component {
               Row {
@@ -291,9 +462,23 @@ Panel {
                   onClicked: if (root.service) root.service.rotate(true)
                 }
                 PanelActionButton {
+                  visible: Model.hasContent(root.current)
+                  enabled: visible
+                  iconText: "\u{F018F}"
+                  tooltipText: root.t("copy")
+                  foreground: root.contentForeground
+                  onClicked: if (root.service) root.service.copyPassage("all")
+                }
+                PanelActionButton {
+                  iconText: "\u{F0E16}"
+                  tooltipText: root.t("savedAyahs")
+                  foreground: root.savedOpen ? Commons.Color.accent : root.contentForeground
+                  onClicked: root.toggleSaved()
+                }
+                PanelActionButton {
                   iconText: "\u{F0493}"
                   tooltipText: root.t("settings")
-                  foreground: root.settingsOpen ? Color.accent : root.contentForeground
+                  foreground: root.settingsOpen ? Commons.Color.accent : root.contentForeground
                   onClicked: root.settingsOpen = !root.settingsOpen
                 }
               }
@@ -337,13 +522,52 @@ Panel {
 
             Text {
               width: parent.width
-              text: Model.ayahReference(root.current)
+              text: Model.ayahReference({ ayah: root.ayah })
                 + (root.ayah && root.ayah.translationAuthor ? "  ·  " + root.ayah.translationAuthor : "")
               color: root.dim
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
               textFormat: Text.PlainText
               elide: Text.ElideRight
+            }
+
+            // Look at the neighbouring ayahs without touching the rotation.
+            Row {
+              spacing: Style.spacing.sm
+              readonly property var edges: Model.ayahEdges(root.ayah)
+              readonly property bool busy: root.service ? root.service.navBusy === true : false
+              PanelActionButton {
+                iconText: "\u{F0141}"
+                tooltipText: root.t("prevAyah")
+                foreground: root.contentForeground
+                enabled: !parent.edges.first && !parent.busy
+                opacity: enabled ? 1 : 0.35
+                onClicked: if (root.service) root.service.stepAyah(-1)
+              }
+              PanelActionButton {
+                iconText: "\u{F0142}"
+                tooltipText: root.t("nextAyah")
+                foreground: root.contentForeground
+                enabled: !parent.edges.last && !parent.busy
+                opacity: enabled ? 1 : 0.35
+                onClicked: if (root.service) root.service.stepAyah(1)
+              }
+              PanelActionButton {
+                readonly property bool fav: root.service ? root.service.shownIsFavorite === true : false
+                iconText: fav ? "\u{F04CE}" : "\u{F04D2}"
+                tooltipText: root.t(fav ? "unfavorite" : "favorite")
+                foreground: fav ? Commons.Color.accent : root.contentForeground
+                enabled: root.ayah !== null && root.ayah !== undefined && !(root.service && root.service.listsBusy)
+                opacity: enabled ? 1 : 0.35
+                onClicked: if (root.service) root.service.toggleFavorite()
+              }
+              PanelActionButton {
+                visible: root.service && root.service.viewedAyah !== null
+                iconText: "\u{F0450}"
+                tooltipText: root.t("backToToday")
+                foreground: root.contentForeground
+                onClicked: if (root.service) root.service.resetView()
+              }
             }
           }
 
@@ -482,15 +706,46 @@ Panel {
             uiFamily: root.contentFontFamily
           }
 
-          Text {
+          Column {
             width: parent.width
+            spacing: Style.spacing.sm
             visible: !Model.hasContent(root.current)
-            text: root.service && root.service.busy ? root.t("loading") : root.t("noContent")
-            color: root.dim
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.body
-            horizontalAlignment: Text.AlignHCenter
-            textFormat: Text.PlainText
+
+            Text {
+              width: parent.width
+              text: root.service && root.service.failed ? root.t("fetchFailed")
+                : root.service && root.service.busy ? root.t("loading") : root.t("noContent")
+              color: root.dim
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+            }
+
+            // What the helper actually said, for the person who has to fix it.
+            Text {
+              width: parent.width
+              visible: root.service && root.service.failed && text !== ""
+              text: root.service ? Model.safeDisplayText(root.service.lastError) : ""
+              color: root.dim
+              opacity: 0.7
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+            }
+
+            Button {
+              anchors.horizontalCenter: parent.horizontalCenter
+              visible: root.service && root.service.failed
+              text: root.t("retry")
+              bordered: true
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: if (root.service) root.service.rotate(true)
+            }
           }
 
           // ---- settings
@@ -529,6 +784,7 @@ Panel {
             }
 
             SearchableDropdown {
+              id: translationPicker
               width: parent.width
               label: root.t("quranTranslation")
               placeholderText: root.t("search")
@@ -563,6 +819,7 @@ Panel {
             }
 
             SearchableDropdown {
+              id: bookPicker
               width: parent.width
               label: root.t("hadithBook")
               placeholderText: root.t("search")
@@ -576,6 +833,7 @@ Panel {
             // Most book-and-language pairs have exactly one edition, so the
             // picker only earns its space when there is a choice to make.
             SearchableDropdown {
+              id: editionPicker
               width: parent.width
               visible: root.hadithEditions.length > 1
               label: root.t("hadithEdition")
@@ -586,6 +844,15 @@ Panel {
               fontFamily: root.contentFontFamily
               onChanged: function(v) { root.persist({ hadithEdition: v }) }
             }
+
+            // SearchableDropdown assigns its own `value` when an option is
+            // picked, which severs the `value:` binding. These three depend on
+            // another picker (a new language changes the edition list and
+            // writes a new edition), so without a Binding they keep showing
+            // what was last picked by hand instead of what is now stored.
+            Binding { target: translationPicker; property: "value"; value: root.cfg("quranTranslationEdition", "") }
+            Binding { target: bookPicker; property: "value"; value: root.currentBook }
+            Binding { target: editionPicker; property: "value"; value: root.cfg("hadithEdition", "eng-abudawud") }
 
             Dropdown {
               width: parent.width
@@ -710,7 +977,7 @@ Panel {
   component ScriptureText: Text {
     property string language: ""
     property string direction: "ltr"
-    property color foreground: Color.foreground
+    property color foreground: Commons.Color.foreground
     property string uiFamily: Style.font.family
     property real scale_: 1.0
 
@@ -727,7 +994,7 @@ Panel {
   }
 
   component Note: Text {
-    property color foreground: Color.foreground
+    property color foreground: Commons.Color.foreground
     property string uiFamily: Style.font.family
 
     color: Qt.darker(foreground, 1.5)

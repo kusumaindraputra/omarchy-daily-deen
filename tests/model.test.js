@@ -216,3 +216,235 @@ test("an ungraded collection produces no badges rather than an empty one", () =>
   assert.equal(Grades.isImplicitlySahih("bukhari"), true)
   assert.equal(Grades.isImplicitlySahih("abudawud"), false)
 })
+
+const COPY_STATE = {
+  ayah: { text: "بِسْمِ ٱللَّهِ", translation: "In the name of God", translationAuthor: "Abdel Haleem",
+          surah: 1, ayah: 1, surahName: "Al-Fatiha", surahEnglish: "The Opening" },
+  hadith: { arabicText: "إنما الأعمال بالنيات", text: "Deeds are by intentions.", collectionName: "Sahih al Bukhari",
+            number: 1, authority: "Al-Albani",
+            grades: [{ name: "Zubair Ali Zai", grade: "Hasan" }, { name: "Al-Albani", grade: "Sahih" }] }
+}
+
+test("formatCopy ayah gives Arabic, translation and a reference line", () => {
+  assert.equal(Model.formatCopy(COPY_STATE, "ayah"),
+    "بِسْمِ ٱللَّهِ\n\nIn the name of God\n\n— Al-Fatiha 1:1 · Abdel Haleem")
+})
+
+test("formatCopy hadith gives Arabic, text, reference and the grade of the chosen authority", () => {
+  assert.equal(Model.formatCopy(COPY_STATE, "hadith"),
+    "إنما الأعمال بالنيات\n\nDeeds are by intentions.\n\n— Sahih al Bukhari 1 · Sahih (Al-Albani)")
+})
+
+test("formatCopy all joins ayah and hadith, and unknown values mean all", () => {
+  const all = Model.formatCopy(COPY_STATE, "all")
+  assert.equal(all, Model.formatCopy(COPY_STATE, "ayah") + "\n\n" + Model.formatCopy(COPY_STATE, "hadith"))
+  assert.equal(Model.formatCopy(COPY_STATE), all)
+  assert.equal(Model.formatCopy(COPY_STATE, "bogus"), all)
+})
+
+test("formatCopy skips an empty part without a dangling separator", () => {
+  const onlyAyah = { ayah: COPY_STATE.ayah, hadith: null }
+  assert.equal(Model.formatCopy(onlyAyah, "all"), Model.formatCopy(onlyAyah, "ayah"))
+  assert.equal(Model.formatCopy(onlyAyah, "hadith"), "")
+  const onlyHadith = { ayah: { text: "", translation: "" }, hadith: COPY_STATE.hadith }
+  assert.equal(Model.formatCopy(onlyHadith, "all"), Model.formatCopy(COPY_STATE, "hadith"))
+})
+
+test("formatCopy never throws on null, broken or non-string input", () => {
+  for (const bad of [null, undefined, 42, "x", [], {}, { ayah: 5, hadith: "x" }, { ayah: { text: {}, translation: 7 }, hadith: { text: [], grades: "no" } }]) {
+    assert.equal(typeof Model.formatCopy(bad, "all"), "string")
+  }
+  assert.equal(Model.formatCopy(null, "all"), "")
+  assert.equal(Model.formatCopy({ hadith: { text: "ok", number: 3, grades: [null, 5, { grade: "Sahih" }] } }, "hadith").includes("Sahih"), true)
+})
+
+test("formatCopy strips control characters and markup per field", () => {
+  const evil = { ayah: { text: "a\u0000b\nc", translation: "<script>alert(1)</script>hi\u202e", translationAuthor: "x\ty",
+                         surah: 1, ayah: 2, surahName: "<b>Sura</b>" } }
+  const out = Model.formatCopy(evil, "ayah")
+  assert.equal(out, "a b c\n\nscriptalert(1)/scripthi\n\n— bSura/b 1:2 · x y")
+  assert.doesNotMatch(out, /[<>\u0000\u202e]/)
+})
+
+test("formatCopy picks the grade by authority and falls back to the first grade", () => {
+  const h = (authority) => ({ hadith: { text: "t", collectionName: "C", number: 9, authority,
+    grades: [{ name: "A", grade: "Hasan" }, { name: "B", grade: "Sahih" }] } })
+  assert.match(Model.formatCopy(h("B"), "hadith"), /· Sahih \(B\)$/)
+  assert.match(Model.formatCopy(h("nobody"), "hadith"), /· Hasan \(A\)$/)
+  assert.match(Model.formatCopy(h(undefined), "hadith"), /· Hasan \(A\)$/)
+  assert.doesNotMatch(Model.formatCopy({ hadith: { text: "t", collectionName: "C", number: 9, grades: [] } }, "hadith"), /·/)
+})
+
+test("formatCopy for a hadith without Arabic has no blank first line or doubled blank lines", () => {
+  const out = Model.formatCopy({ hadith: { text: "Deeds.", collectionName: "C", number: 2 } }, "hadith")
+  assert.equal(out, "Deeds.\n\n— C 2")
+  assert.doesNotMatch(out, /\n\n\n/)
+})
+
+// --- ayah navigation --------------------------------------------------------
+
+const AY = { surah: 2, ayah: 5, text: "x", ayahCount: 286 }
+
+test("withViewedAyah swaps in a valid ayah on a copy and leaves the state alone", () => {
+  const state = { ayah: { surah: 1, ayah: 1, text: "a" }, hadith: { id: 7 } }
+  const out = Model.withViewedAyah(state, AY)
+  assert.notEqual(out, state)
+  assert.deepEqual(out.ayah, AY)
+  assert.deepEqual(out.hadith, { id: 7 })
+  assert.deepEqual(state.ayah, { surah: 1, ayah: 1, text: "a" })
+})
+
+test("withViewedAyah returns the state as is for null, broken or missing input", () => {
+  const state = { ayah: { surah: 1, ayah: 1, text: "a" } }
+  assert.equal(Model.withViewedAyah(state, null), state)
+  assert.equal(Model.withViewedAyah(state, { surah: 0, ayah: 1, text: "x" }), state)
+  assert.equal(Model.withViewedAyah(state, { surah: 2, ayah: 1.5, text: "x" }), state)
+  assert.equal(Model.withViewedAyah(state, { surah: 2, ayah: 1 }), state)
+  assert.equal(Model.withViewedAyah(state, "nope"), state)
+  assert.equal(Model.withViewedAyah(null, AY), null)
+  assert.equal(Model.withViewedAyah(undefined, AY), undefined)
+  assert.equal(Model.withViewedAyah("junk", AY), "junk")
+})
+
+test("ayahEdges flags the first and last ayah of the Quran", () => {
+  assert.deepEqual(Model.ayahEdges({ surah: 1, ayah: 1, ayahCount: 7 }), { first: true, last: false })
+  assert.deepEqual(Model.ayahEdges(AY), { first: false, last: false })
+  assert.deepEqual(Model.ayahEdges({ surah: 114, ayah: 6, ayahCount: 6 }), { first: false, last: true })
+  assert.deepEqual(Model.ayahEdges({ surah: 114, ayah: 5, ayahCount: 6 }), { first: false, last: false })
+  assert.deepEqual(Model.ayahEdges({ surah: 3, ayah: 200, ayahCount: 200 }, 3), { first: false, last: true })
+})
+
+test("ayahEdges: a missing ayahCount is never the last ayah; a broken ayah disables both", () => {
+  assert.equal(Model.ayahEdges({ surah: 114, ayah: 6 }).last, false)
+  assert.equal(Model.ayahEdges({ surah: 114, ayah: 6, ayahCount: "6" }).last, false)
+  assert.deepEqual(Model.ayahEdges(null), { first: true, last: true })
+  assert.deepEqual(Model.ayahEdges(undefined), { first: true, last: true })
+  assert.deepEqual(Model.ayahEdges("x"), { first: true, last: true })
+})
+
+test("stepArgs builds the show argv with the default editions", () => {
+  assert.deepEqual(Model.stepArgs("/h/deen-fetch", {}, AY, 1), [
+    "/h/deen-fetch", "show",
+    "--quran", "ara-quranuthmanihaf",
+    "--quran-translation", "eng-abdelhaleem",
+    "--surah", "2", "--ayah", "5", "--step", "1"])
+  assert.deepEqual(Model.stepArgs("h", null, AY, -1).slice(-2), ["--step", "-1"])
+})
+
+test("stepArgs uses custom editions and stringifies every argument", () => {
+  const out = Model.stepArgs("h", { quranEdition: "ind-x", quranTranslationEdition: "ind-y" }, AY, -1)
+  assert.deepEqual(out, ["h", "show", "--quran", "ind-x", "--quran-translation", "ind-y",
+    "--surah", "2", "--ayah", "5", "--step", "-1"])
+  assert.ok(out.every((a) => typeof a === "string"))
+})
+
+test("stepArgs refuses any delta other than 1 or -1", () => {
+  for (const d of [0, 2, -2, 0.5, "1", null, undefined, NaN]) {
+    assert.equal(Model.stepArgs("h", {}, AY, d), null)
+  }
+})
+
+// ---- favorites and history ----
+
+test("parseLists normalises entries and drops anything that is not a reference", () => {
+  const raw = JSON.stringify({
+    favorites: [
+      { surah: 11, ayah: 103, name: "Hud", at: 5 },
+      { surah: 0, ayah: 1 }, { surah: 1, ayah: 0 }, { surah: 1.5, ayah: 2 },
+      { surah: "2", ayah: 3 }, { surah: 2 }, null, "x", 7, [1, 2],
+      { surah: 2, ayah: 255, name: null, at: "soon", extra: "ignored" }
+    ],
+    history: [{ surah: 1, ayah: 1, name: 5, at: 1.5 }]
+  })
+  assert.deepEqual(Model.parseLists(raw), {
+    favorites: [
+      { surah: 11, ayah: 103, name: "Hud", at: 5 },
+      { surah: 2, ayah: 255, name: "", at: 0 }
+    ],
+    history: [{ surah: 1, ayah: 1, name: "5", at: 0 }]
+  })
+})
+
+test("parseLists never throws and falls back to empty lists", () => {
+  const empty = { favorites: [], history: [] }
+  for (const raw of [undefined, null, "", "{", "null", "[]", "42", "\"s\"", {}, 5,
+    '{"favorites":{"a":1},"history":"x"}', '{"favorites":null}']) {
+    assert.deepEqual(Model.parseLists(raw), empty)
+  }
+  assert.deepEqual(Model.parseLists('{"favorites":[{"surah":1,"ayah":1}]}').history, [])
+})
+
+test("parseLists strips control and bidi characters and truncates names to 60", () => {
+  const name = "Al‮Baq\u0000ara\n<b>x</b>‏"
+  const out = Model.parseLists(JSON.stringify({ favorites: [{ surah: 2, ayah: 1, name }] }))
+  assert.ok(!/[\u0000-\u001f​-‏‪-‮<>]/.test(out.favorites[0].name.replace(/‮/g, "")))
+  assert.ok(!out.favorites[0].name.includes("<"))
+  const long = Model.parseLists(JSON.stringify({ favorites: [{ surah: 2, ayah: 1, name: "a".repeat(200) }] }))
+  assert.equal(long.favorites[0].name.length, 60)
+})
+
+test("parseLists caps favorites at 500 and history at 50", () => {
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({ surah: 1, ayah: i + 1 }))
+  const out = Model.parseLists(JSON.stringify({ favorites: mk(600), history: mk(80) }))
+  assert.equal(out.favorites.length, 500)
+  assert.equal(out.history.length, 50)
+  assert.equal(out.favorites[0].ayah, 1)
+})
+
+test("isFavorite matches on surah and ayah only", () => {
+  const favs = [{ surah: 2, ayah: 5, name: "x", at: 0 }, null, { surah: 3, ayah: 1 }]
+  assert.equal(Model.isFavorite(favs, { surah: 2, ayah: 5, text: "t" }), true)
+  assert.equal(Model.isFavorite(favs, { surah: 3, ayah: 1 }), true)
+  assert.equal(Model.isFavorite(favs, { surah: 2, ayah: 6 }), false)
+  // the same ayah number in another surah is a different ayah
+  assert.equal(Model.isFavorite(favs, { surah: 9, ayah: 5 }), false)
+  assert.equal(Model.isFavorite(favs, { surah: "2", ayah: 5 }), false)
+  for (const bad of [null, undefined, 5, "x", {}, { surah: 2 }]) assert.equal(Model.isFavorite(favs, bad), false)
+  for (const bad of [null, undefined, "x", {}]) assert.equal(Model.isFavorite(bad, { surah: 2, ayah: 5 }), false)
+})
+
+test("listLabel puts the name before surah:ayah", () => {
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "Hud" }), "Hud 11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "" }), "11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103 }), "11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "  \u0000 " }), "11:103")
+  assert.equal(Model.listLabel({ surah: 11, ayah: 103, name: "A‮B<" }).includes("<"), false)
+  for (const bad of [null, undefined, "x", 3, {}, { surah: 0, ayah: 1 }, { surah: 1 }]) assert.equal(Model.listLabel(bad), "")
+})
+
+test("listsArgs is the helper and the lists verb", () => {
+  assert.deepEqual(Model.listsArgs("h"), ["h", "lists"])
+})
+
+test("favoriteArgs builds fav-toggle with the cleaned, truncated name", () => {
+  assert.deepEqual(Model.favoriteArgs("h", { surah: 11, ayah: 103, surahEnglish: "Hud" }),
+    ["h", "fav-toggle", "--surah", "11", "--ayah", "103", "--name", "Hud"])
+  assert.deepEqual(Model.favoriteArgs("h", { surah: 1, ayah: 1 }).slice(-2), ["--name", ""])
+  assert.deepEqual(Model.favoriteArgs("h", { surah: 1, ayah: 1, surahEnglish: null }).slice(-2), ["--name", ""])
+  const dirty = Model.favoriteArgs("h", { surah: 1, ayah: 1, surahEnglish: "A‮\nB<x>" })
+  assert.ok(!/[\u0000-\u001f​-‏<>]/.test(dirty[7]))
+  assert.equal(Model.favoriteArgs("h", { surah: 1, ayah: 1, surahEnglish: "z".repeat(99) })[7].length, 60)
+  assert.ok(dirty.every((a) => typeof a === "string"))
+})
+
+test("favoriteArgs refuses an ayah without a real reference", () => {
+  for (const bad of [null, undefined, "x", 5, {}, { surah: 0, ayah: 1 }, { surah: 1, ayah: 0 },
+    { surah: "1", ayah: 1 }, { surah: 1.5, ayah: 1 }, { surah: 1 }, { surah: -1, ayah: 1 }]) {
+    assert.equal(Model.favoriteArgs("h", bad), null)
+  }
+})
+
+test("jumpArgs is stepArgs without --step", () => {
+  assert.deepEqual(Model.jumpArgs("h", {}, 2, 255),
+    ["h", "show", "--quran", "ara-quranuthmanihaf", "--quran-translation", "eng-abdelhaleem", "--surah", "2", "--ayah", "255"])
+  assert.deepEqual(Model.jumpArgs("h", { quranEdition: "ind-x", quranTranslationEdition: "ind-y" }, 1, 1),
+    ["h", "show", "--quran", "ind-x", "--quran-translation", "ind-y", "--surah", "1", "--ayah", "1"])
+  assert.equal(Model.jumpArgs("h", null, 3, 4).length, 10)
+  assert.ok(!Model.jumpArgs("h", null, 3, 4).includes("--step"))
+})
+
+test("jumpArgs refuses non-integer or non-positive references", () => {
+  for (const [s, a] of [[0, 1], [1, 0], [1.5, 1], ["1", 1], [1, "1"], [null, 1], [1, undefined], [-1, 1], [NaN, 1]]) {
+    assert.equal(Model.jumpArgs("h", {}, s, a), null)
+  }
+})

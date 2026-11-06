@@ -19,14 +19,51 @@ BarWidget {
 
   readonly property string glyph: "\u{F405}"
 
-  // serviceFor is a plain function, so a binding on bar.shell alone would not
-  // re-evaluate when the service finishes loading — services are created
-  // asynchronously and a widget can be built first. Reading _services is what
-  // creates the dependency.
-  readonly property var service: {
-    if (!bar || !bar.shell) return null
-    var _revision = bar.shell._services
-    return bar.shell.serviceFor(root.moduleName)
+  // Looked up rather than bound. serviceFor() is a plain function, so nothing
+  // re-evaluates it when a service finishes loading, and reading
+  // bar.shell._services — which this once did to create that dependency —
+  // reads nothing at all: a plugin's bar.shell is a scoped PluginShellApi, and
+  // _services lives only on the host's own ShellRoot. A widget built before
+  // its service would have kept a null here for good. So ask again until the
+  // answer is non-null; the host never hands a service back and then takes it
+  // away without rebuilding the widget.
+  property var service: null
+
+  function resolveService() {
+    if (!bar || !bar.shell || typeof bar.shell.serviceFor !== "function") return
+    var found = bar.shell.serviceFor(root.moduleName)
+    if (found && found !== root.service) root.service = found
+  }
+
+  // Which of the host bar/shell members this plugin calls are absent. Pure:
+  // names only, never throws, and a null bar reports the bar itself.
+  function missingHostApi(b) {
+    if (!b) return ["bar"]
+    var out = []
+    var fns = ["setCenterHoverRevealSuppressed", "switchPanelFrom"]
+    for (var i = 0; i < fns.length; i++)
+      if (typeof b[fns[i]] !== "function") out.push(fns[i])
+    if (!b.shell) { out.push("shell"); return out }
+    var sfns = ["serviceFor", "updateEntryInline"]
+    for (var j = 0; j < sfns.length; j++)
+      if (typeof b.shell[sfns[j]] !== "function") out.push("shell." + sfns[j])
+    return out
+  }
+
+  property bool _hostChecked: false
+  function checkHost() {
+    if (_hostChecked || !bar) return
+    _hostChecked = true
+    var missing = missingHostApi(bar)
+    if (missing.length > 0) console.warn("daily-deen: host API missing: " + missing.join(", "))
+  }
+
+  Timer {
+    interval: 500
+    repeat: true
+    running: root.service === null
+    triggeredOnStart: true
+    onTriggered: root.resolveService()
   }
 
   readonly property string locale: service ? service.locale : "en"
@@ -67,12 +104,19 @@ BarWidget {
     if ("service" in target) target.service = root.service
   }
 
+  // The service cannot see shell.json itself (see Service.settings), so the
+  // widget — whose `settings` the bar keeps current — passes it along.
+  function feedService() {
+    if (root.service && typeof root.service.adoptSettings === "function" && root.settings)
+      root.service.adoptSettings(root.settings)
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onBarChanged: injectPanel()
-  onSettingsChanged: injectPanel()
-  onServiceChanged: injectPanel()
+  onBarChanged: { checkHost(); injectPanel(); resolveService() }
+  onSettingsChanged: { injectPanel(); feedService() }
+  onServiceChanged: { injectPanel(); feedService() }
 
   Loader {
     id: panelLoader

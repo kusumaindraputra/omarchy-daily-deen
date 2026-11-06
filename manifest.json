@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.kusumaindraputra.daily-deen",
   "name": "Daily Ayah & Hadith",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Kusuma Putra",
   "license": "MIT",
   "description": "A rotating Qur'an ayah and hadith in the bar, with a panel for the full text, translation, reference and grading. 98 languages for the Qur'an, 9 for hadith, and it keeps working offline.",

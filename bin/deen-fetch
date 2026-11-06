@@ -12,6 +12,11 @@
 #   deen-fetch sync    --quran SLUG [--quran-translation SLUG] [--hadith SLUG]
 #                      [--hadith-arabic SLUG] [--force]
 #   deen-fetch pick    [--force] [--offline] [options...]
+#   deen-fetch show    --quran SLUG [--quran-translation SLUG] --surah N --ayah N
+#                      [--step 1|-1]      (cache only; never writes state)
+#   deen-fetch lists                      (favorites + pick history, one JSON line)
+#   deen-fetch fav-toggle --surah N --ayah N [--name S]
+#                                         (add/remove a favorite, prints lists)
 #   deen-fetch status
 #
 # pick is idempotent and does its own due check, so a caller can simply run it
@@ -31,6 +36,10 @@ CATALOG="$CACHE_DIR/catalog.json"
 CURRENT="$STATE_DIR/current.json"
 SEEN="$STATE_DIR/seen.json"
 SEEN_MAX=60
+FAVORITES="$STATE_DIR/favorites.json"
+HISTORY="$STATE_DIR/history.json"
+FAVORITES_MAX=500
+HISTORY_MAX=50
 
 OFFLINE=0
 
@@ -377,6 +386,77 @@ seen_push() {
     <<<"$cur" | write_atomic "$SEEN"
 }
 
+# Favorites and pick history hold references only (surah, ayah, a short name,
+# when) and never the text, which stays in the cache. Both files are newest
+# first. Reads are tolerant: a missing, empty, corrupt or non-array file reads
+# as [], and entries that are not a positive integer surah and ayah are dropped.
+# The name is coerced to a string, stripped of control characters and cut.
+STORE_NORMALIZE='
+  def clean: (if . == null then "" elif type == "string" then . else tostring end)
+             | gsub("[\u0001-\u001f\u007f]"; "") | .[0:60];
+  def posint: type == "number" and . == floor and . >= 1;
+  if type == "array" then
+    [ .[] | select(type == "object" and (.surah | posint) and (.ayah | posint))
+      | { surah: (.surah | floor), ayah: (.ayah | floor), name: (.name | clean),
+          at: (if (.at | type) == "number" and .at >= 0 then (.at | floor) else 0 end) } ]
+  else [] end'
+
+store_read() {
+  local out
+  out="$(jq -c "$STORE_NORMALIZE" "$1" 2>/dev/null)" || out=""
+  [[ -n $out ]] || out='[]'
+  printf '%s' "$out"
+}
+
+lists_json() {
+  jq -nc --argjson f "$(store_read "$FAVORITES")" --argjson h "$(store_read "$HISTORY")" \
+    '{favorites: $f, history: $h}'
+}
+
+# args: file, max, surah, ayah, name. Replaces any entry for the same ayah and
+# puts the new one first.
+store_prepend() {
+  local file="$1" max="$2" surah="$3" ayah="$4" name="$5" cur
+  cur="$(store_read "$file")"
+  jq -c --argjson s "$surah" --argjson a "$ayah" --arg n "$name" \
+    --argjson at "$(date +%s)" --argjson max "$max" \
+    "[{surah:\$s, ayah:\$a, name:\$n, at:\$at}] + map(select(.surah != \$s or .ayah != \$a))
+     | $STORE_NORMALIZE | .[0:\$max]" <<<"$cur" | write_atomic "$file"
+}
+
+cmd_lists() {
+  (( $# == 0 )) || die "unknown flag $1"
+  lists_json
+}
+
+cmd_fav_toggle() {
+  local surah="" ayah="" name=""
+  while (( $# )); do
+    case $1 in
+      --surah) surah="${2-}"; shift;;
+      --ayah) ayah="${2-}"; shift;;
+      --name) name="${2-}"; shift;;
+      *) die "unknown flag $1";;
+    esac; shift
+  done
+  [[ $surah =~ ^[0-9]+$ ]] && (( 10#$surah >= 1 )) || die "invalid surah: $surah"
+  [[ $ayah  =~ ^[0-9]+$ ]] && (( 10#$ayah  >= 1 )) || die "invalid ayah: $ayah"
+  surah=$(( 10#$surah )); ayah=$(( 10#$ayah ))
+
+  local cur
+  cur="$(store_read "$FAVORITES")"
+  if jq -e --argjson s "$surah" --argjson a "$ayah" \
+       'any(.[]; .surah == $s and .ayah == $a)' <<<"$cur" >/dev/null; then
+    jq -c --argjson s "$surah" --argjson a "$ayah" \
+      'map(select(.surah != $s or .ayah != $a))' <<<"$cur" | write_atomic "$FAVORITES" \
+      || die "could not write favorites"
+  else
+    store_prepend "$FAVORITES" "$FAVORITES_MAX" "$surah" "$ayah" "$name" \
+      || die "could not write favorites"
+  fi
+  lists_json
+}
+
 classes_for_filter() {
   case "$1" in
     any)         echo '["sahih","hasan","daif","maudu","unknown"]';;
@@ -385,6 +465,36 @@ classes_for_filter() {
     daif)        echo '["daif"]';;
     *) die "unknown grade filter $1";;
   esac
+}
+
+# The one place that decides what an ayah object looks like, shared by pick and
+# show so the two cannot drift apart. Args: primary file, secondary (translation)
+# file or "", edition slug, translation slug, index into primary's .quran.
+ayah_object() {
+  local primary="$1" secondary="$2" ed="$3" ted="$4" idx="$5"
+  jq -c --argjson i "$idx" \
+    --arg ed "$ed" --arg ted "$ted" \
+    --slurpfile cat "$CATALOG" \
+    --slurpfile tr "${secondary:-/dev/null}" '
+    .quran[$i] as $a
+    | ($cat[0].quran // [] | map({key:.slug, value:.}) | from_entries) as $eds
+    | ($cat[0].surahs // [] | map(select(.n == $a.chapter)) | first) as $s
+    | {
+        edition: $ed,
+        editionAuthor: ($eds[$ed].author // ""),
+        language: ($eds[$ed].language // ""),
+        direction: ($eds[$ed].direction // "ltr"),
+        surah: $a.chapter, ayah: $a.verse, text: $a.text,
+        surahName: ($s.name // ""), surahEnglish: ($s.english // ""),
+        surahArabic: ($s.arabic // ""), ayahCount: ($s.ayahs // 0),
+        translationEdition: $ted,
+        translationAuthor: ($eds[$ted].author // ""),
+        translationLanguage: ($eds[$ted].language // ""),
+        translationDirection: ($eds[$ted].direction // "ltr"),
+        translation: ( if ($tr | length) > 0
+                       then ($tr[0].quran | map(select(.chapter == $a.chapter and .verse == $a.verse)) | first | .text // "")
+                       else "" end )
+      }' "$primary"
 }
 
 cmd_pick() {
@@ -489,30 +599,12 @@ cmd_pick() {
           idx=$(( $(rand31) % total )); tries=$(( tries + 1 ))
         done
       fi
-      ayah_json="$(jq -c --argjson i "$idx" \
-        --arg ed "${q:-$qt}" --arg ted "$qt" \
-        --slurpfile cat "$CATALOG" \
-        --slurpfile tr "${secondary:-/dev/null}" '
-        .quran[$i] as $a
-        | ($cat[0].quran // [] | map({key:.slug, value:.}) | from_entries) as $eds
-        | ($cat[0].surahs // [] | map(select(.n == $a.chapter)) | first) as $s
-        | {
-            edition: $ed,
-            editionAuthor: ($eds[$ed].author // ""),
-            language: ($eds[$ed].language // ""),
-            direction: ($eds[$ed].direction // "ltr"),
-            surah: $a.chapter, ayah: $a.verse, text: $a.text,
-            surahName: ($s.name // ""), surahEnglish: ($s.english // ""),
-            surahArabic: ($s.arabic // ""), ayahCount: ($s.ayahs // 0),
-            translationEdition: $ted,
-            translationAuthor: ($eds[$ted].author // ""),
-            translationLanguage: ($eds[$ted].language // ""),
-            translationDirection: ($eds[$ted].direction // "ltr"),
-            translation: ( if ($tr | length) > 0
-                           then ($tr[0].quran | map(select(.chapter == $a.chapter and .verse == $a.verse)) | first | .text // "")
-                           else "" end )
-          }' "$primary")"
+      ayah_json="$(ayah_object "$primary" "$secondary" "${q:-$qt}" "$qt" "$idx")"
       seen_push "ayah:$(jq -r '"\(.surah):\(.ayah)"' <<<"$ayah_json")"
+      # Best effort: a history that cannot be written must never fail the pick.
+      store_prepend "$HISTORY" "$HISTORY_MAX" \
+        "$(jq -r '.surah' <<<"$ayah_json")" "$(jq -r '.ayah' <<<"$ayah_json")" \
+        "$(jq -r '.surahEnglish // ""' <<<"$ayah_json")" 2>/dev/null || true
     fi
   fi
 
@@ -608,6 +700,69 @@ cmd_pick() {
   cat "$CURRENT"
 }
 
+# Read-only: shows one ayah, optionally the one before/after it, from what is
+# already cached. It never downloads and never writes state, so stepping through
+# the surah cannot disturb the rotation (current.json, seen.json).
+cmd_show() {
+  local q="" qt="" surah="" ayah="" step="" has_step=0
+  while (( $# )); do
+    case $1 in
+      --quran) q="${2-}"; shift;;
+      --quran-translation) qt="${2-}"; shift;;
+      --surah) surah="${2-}"; shift;;
+      --ayah) ayah="${2-}"; shift;;
+      --step) step="${2-}"; has_step=1; shift;;
+      *) die "unknown flag $1";;
+    esac; shift
+  done
+  [[ -n $q ]] || die "show needs --quran"
+  require_slug "$q"  "quran"
+  require_slug "$qt" "quran translation"
+  [[ $surah =~ ^[0-9]+$ ]] && (( 10#$surah >= 1 )) || die "invalid surah: $surah"
+  [[ $ayah  =~ ^[0-9]+$ ]] && (( 10#$ayah  >= 1 )) || die "invalid ayah: $ayah"
+  (( ! has_step )) || [[ $step == 1 || $step == -1 ]] || die "invalid step: $step (use 1 or -1)"
+  surah=$(( 10#$surah )); ayah=$(( 10#$ayah ))
+
+  [[ -s $CATALOG ]] || die "catalog is not cached"
+  local primary secondary=""
+  primary="$(quran_path "$q")"
+  [[ -s $primary ]] || die "edition $q is not cached"
+  if [[ -n $qt ]]; then
+    secondary="$(quran_path "$qt")"
+    [[ -s $secondary ]] || die "edition $qt is not cached"
+  fi
+
+  if (( has_step )); then
+    local pos
+    pos="$(jq -r --argjson s "$surah" --argjson a "$ayah" --argjson d "$step" '
+      (.surahs // []) as $ss
+      | ($ss | map(.n) | max) as $last
+      | ($ss | map(select(.n == $s)) | first) as $cur
+      | if $cur == null or $a > $cur.ayahs then "missing"
+        elif $d == 1 then
+          (if $a < $cur.ayahs then "\($s) \($a + 1)"
+           elif $s >= $last then "edge"
+           else (($ss | map(select(.n > $s)) | min_by(.n)) as $n | "\($n.n) 1") end)
+        else
+          (if $a > 1 then "\($s) \($a - 1)"
+           else (($ss | map(select(.n < $s)) | max_by(.n)) as $p
+                 | if $p == null then "edge" else "\($p.n) \($p.ayahs)" end) end)
+        end' "$CATALOG")" || die "catalog is unreadable"
+    case $pos in
+      missing) die "surah $surah ayah $ayah is not in the catalog";;
+      edge) (( step > 0 )) && die "no next ayah" || die "no previous ayah";;
+    esac
+    surah="${pos% *}"; ayah="${pos#* }"
+  fi
+
+  local idx
+  idx="$(jq -r --argjson s "$surah" --argjson a "$ayah" \
+    '(.quran // []) | map(.chapter == $s and .verse == $a) | index(true) // empty' \
+    "$primary" 2>/dev/null)" || idx=""
+  [[ $idx =~ ^[0-9]+$ ]] || die "ayah $surah:$ayah not found in edition $q"
+  ayah_object "$primary" "$secondary" "$q" "$qt" "$idx"
+}
+
 cmd_status() {
   if [[ -s $CURRENT ]]; then cat "$CURRENT"
   else jq -n '{version:1, chosenAt:0, ayah:null, hadith:null, source:"empty"}'
@@ -619,15 +774,18 @@ cmd_status() {
 command -v jq   >/dev/null || die "jq is required"
 command -v curl >/dev/null || die "curl is required"
 [[ -s $GRADES_JQ ]] || die "grades.jq missing next to this script"
-mkdir -p "$CACHE_DIR" "$STATE_DIR"
+[[ ${1:-} == show ]] || mkdir -p "$CACHE_DIR" "$STATE_DIR"
 
 cmd="${1:-status}"; shift || true
 case "$cmd" in
   catalog) cmd_catalog "$@";;
   sync)    cmd_sync "$@";;
   pick)    cmd_pick "$@";;
+  show)    cmd_show "$@";;
+  lists)   cmd_lists "$@";;
+  fav-toggle) cmd_fav_toggle "$@";;
   status)  cmd_status "$@";;
   --version) echo "$VERSION";;
-  -h|--help) sed -n '3,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help) sed -n '3,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) die "unknown command: $cmd";;
 esac

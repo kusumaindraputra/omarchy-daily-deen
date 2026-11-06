@@ -276,6 +276,72 @@ function hadithReference(state) {
   return name + " " + h.number
 }
 
+// Plain text for the clipboard. Every field is cleaned on its own and the blank
+// lines between parts are made here, so nothing from the CDN can add structure.
+// Bidi embedding/override/isolate controls would reorder text in whatever the
+// clipboard is pasted into, so they go too.
+var BIDI_CHARS = /[\u202a-\u202e\u2066-\u2069]/g
+
+function cleanFields(obj, keys) {
+  var out = {}
+  for (var i = 0; i < keys.length; i++) {
+    var v = obj[keys[i]]
+    out[keys[i]] = safeDisplayText(typeof v === "string" ? v.replace(BIDI_CHARS, "") : v)
+  }
+  return out
+}
+
+function copyAyah(state) {
+  var a = state && typeof state === "object" ? state.ayah : null
+  if (!a || typeof a !== "object") return ""
+  var f = cleanFields(a, ["text", "translation", "translationAuthor", "surahName", "surahEnglish", "surah", "ayah"])
+  if (!f.text && !f.translation) return ""
+  var ref = ayahReference({ ayah: f })
+  var parts = []
+  if (f.text) parts.push(f.text)
+  if (f.translation) parts.push(f.translation)
+  var tail = "— " + ref + (f.translationAuthor ? " · " + f.translationAuthor : "")
+  parts.push(tail)
+  return parts.join("\n\n")
+}
+
+function copyHadith(state) {
+  var h = state && typeof state === "object" ? state.hadith : null
+  if (!h || typeof h !== "object") return ""
+  var f = cleanFields(h, ["arabicText", "text", "collectionName", "book", "edition", "number", "authority"])
+  if (!f.arabicText && !f.text) return ""
+  var ref = hadithReference({ hadith: f })
+  var tail = "— " + ref
+  var grades = Array.isArray(h.grades) ? h.grades : []
+  var pick = null
+  for (var i = 0; i < grades.length && !pick; i++) {
+    var g = grades[i]
+    if (g && typeof g === "object" && f.authority && safeDisplayText(g.name) === f.authority && safeDisplayText(g.grade)) pick = g
+  }
+  for (var j = 0; j < grades.length && !pick; j++) {
+    var g0 = grades[j]
+    if (g0 && typeof g0 === "object" && safeDisplayText(g0.grade)) pick = g0
+  }
+  if (pick) {
+    var name = safeDisplayText(pick.name)
+    tail += " · " + safeDisplayText(pick.grade) + (name ? " (" + name + ")" : "")
+  }
+  var parts = []
+  if (f.arabicText) parts.push(f.arabicText)
+  if (f.text) parts.push(f.text)
+  parts.push(tail)
+  return parts.join("\n\n")
+}
+
+function formatCopy(state, which) {
+  var ayah = which === "hadith" ? "" : copyAyah(state)
+  var hadith = which === "ayah" ? "" : copyHadith(state)
+  var out = []
+  if (ayah) out.push(ayah)
+  if (hadith) out.push(hadith)
+  return out.join("\n\n")
+}
+
 // The bar is 26px tall. Arabic never goes in it, and neither does a paragraph:
 // a glyph, optionally a short reference, is all that fits honestly.
 function barLabel(state, mode) {
@@ -333,6 +399,126 @@ function pickArgs(helper, settings, force, offline) {
   return args
 }
 
+// Navigating ayahs only changes what is shown: the view copy carries the
+// viewed ayah, the saved state is never touched.
+function withViewedAyah(state, viewed) {
+  if (!state || typeof state !== "object") return state
+  if (!isAyahObject(viewed)) return state
+  var copy = {}
+  for (var k in state) if (Object.prototype.hasOwnProperty.call(state, k)) copy[k] = state[k]
+  copy.ayah = viewed
+  return copy
+}
+
+function isAyahObject(a) {
+  return !!a && typeof a === "object" && Number.isInteger(a.surah) && a.surah >= 1 &&
+    Number.isInteger(a.ayah) && a.ayah >= 1 && typeof a.text === "string"
+}
+
+// Which step buttons are dead. A missing or broken ayah disables both.
+function ayahEdges(ayah, lastSurah) {
+  if (!ayah || typeof ayah !== "object") return { first: true, last: true }
+  var lastS = Number.isInteger(lastSurah) ? lastSurah : 114
+  var count = ayah.ayahCount
+  return {
+    first: ayah.surah === 1 && ayah.ayah === 1,
+    last: Number.isInteger(count) && count >= 1 && ayah.surah === lastS && ayah.ayah === count
+  }
+}
+
+// argv for `deen-fetch show`: served from cache only, never downloads.
+function stepArgs(helper, settings, ayah, delta) {
+  if (delta !== 1 && delta !== -1) return null
+  if (!ayah || typeof ayah !== "object") return null
+  function get(k, fallback) {
+    var v = settings ? settings[k] : undefined
+    return v === undefined || v === null ? fallback : v
+  }
+  return [helper, "show",
+    "--quran", String(get("quranEdition", "ara-quranuthmanihaf")),
+    "--quran-translation", String(get("quranTranslationEdition", "eng-abdelhaleem")),
+    "--surah", String(ayah.surah),
+    "--ayah", String(ayah.ayah),
+    "--step", String(delta)]
+}
+
+// Favorites and history hold references only (surah, ayah, a surah name), never
+// text. Whatever the helper hands back is re-validated here.
+var MAX_FAVORITES = 500
+var MAX_HISTORY = 50
+
+function isPosInt(n) { return typeof n === "number" && Number.isInteger(n) && n >= 1 }
+
+function shortName(value) {
+  var name = safeDisplayText(value === undefined || value === null ? "" : String(value))
+  return name.length > 60 ? name.slice(0, 60).trim() : name
+}
+
+function parseEntries(list, cap) {
+  var out = []
+  if (!Array.isArray(list)) return out
+  for (var i = 0; i < list.length && out.length < cap; i++) {
+    var e = list[i]
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue
+    if (!isPosInt(e.surah) || !isPosInt(e.ayah)) continue
+    out.push({
+      surah: e.surah, ayah: e.ayah, name: shortName(e.name),
+      at: typeof e.at === "number" && Number.isInteger(e.at) ? e.at : 0
+    })
+  }
+  return out
+}
+
+function parseLists(raw) {
+  var data = null
+  try { data = typeof raw === "string" ? JSON.parse(raw) : null } catch (e) { data = null }
+  if (!data || typeof data !== "object" || Array.isArray(data)) data = {}
+  return {
+    favorites: parseEntries(data.favorites, MAX_FAVORITES),
+    history: parseEntries(data.history, MAX_HISTORY)
+  }
+}
+
+function isFavorite(favorites, ayah) {
+  if (!Array.isArray(favorites) || !ayah || typeof ayah !== "object") return false
+  if (!isPosInt(ayah.surah) || !isPosInt(ayah.ayah)) return false
+  for (var i = 0; i < favorites.length; i++) {
+    var f = favorites[i]
+    if (f && typeof f === "object" && f.surah === ayah.surah && f.ayah === ayah.ayah) return true
+  }
+  return false
+}
+
+function listLabel(entry) {
+  if (!entry || typeof entry !== "object") return ""
+  if (!isPosInt(entry.surah) || !isPosInt(entry.ayah)) return ""
+  var name = shortName(entry.name)
+  var ref = entry.surah + ":" + entry.ayah
+  return name ? name + " " + ref : ref
+}
+
+function listsArgs(helper) { return [helper, "lists"] }
+
+function favoriteArgs(helper, ayah) {
+  if (!ayah || typeof ayah !== "object" || !isPosInt(ayah.surah) || !isPosInt(ayah.ayah)) return null
+  return [helper, "fav-toggle", "--surah", String(ayah.surah), "--ayah", String(ayah.ayah),
+    "--name", shortName(ayah.surahEnglish)]
+}
+
+// Like stepArgs without --step: show exactly this ayah, from cache only.
+function jumpArgs(helper, settings, surah, ayah) {
+  if (!isPosInt(surah) || !isPosInt(ayah)) return null
+  function get(k, fallback) {
+    var v = settings ? settings[k] : undefined
+    return v === undefined || v === null ? fallback : v
+  }
+  return [helper, "show",
+    "--quran", String(get("quranEdition", "ara-quranuthmanihaf")),
+    "--quran-translation", String(get("quranTranslationEdition", "eng-abdelhaleem")),
+    "--surah", String(surah),
+    "--ayah", String(ayah)]
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     PLUGIN_ID: PLUGIN_ID,
@@ -347,7 +533,11 @@ if (typeof module !== "undefined" && module.exports) {
     fontsFor: fontsFor, pickFamily: pickFamily, familyFor: familyFor,
     lineHeightFor: lineHeightFor,
     ayahReference: ayahReference, hadithReference: hadithReference,
+    formatCopy: formatCopy,
     barLabel: barLabel, tooltipText: tooltipText,
-    cacheDir: cacheDir, stateDir: stateDir, pickArgs: pickArgs
+    cacheDir: cacheDir, stateDir: stateDir, pickArgs: pickArgs,
+    withViewedAyah: withViewedAyah, ayahEdges: ayahEdges, stepArgs: stepArgs,
+    parseLists: parseLists, isFavorite: isFavorite, listLabel: listLabel,
+    listsArgs: listsArgs, favoriteArgs: favoriteArgs, jumpArgs: jumpArgs
   }
 }

@@ -18,10 +18,28 @@ Item {
 
   readonly property string pluginId: "io.github.kusumaindraputra.daily-deen"
 
-  // Services are not handed `settings`; only bar widgets are. shellConfig is
-  // reassigned wholesale whenever shell.json changes, so reading it here is a
-  // live binding rather than a one-time copy.
-  readonly property var settings: Model.entrySettings(shell ? shell.shellConfig : null, pluginId)
+  // A service is not handed `settings`, and the shell object it is given is a
+  // scoped PluginShellApi with no shellConfig on it — reading shell.shellConfig
+  // here yields undefined, so every setting silently read as its default and a
+  // changed language never reached the helper. shell.barConfig exists but is
+  // only refreshed when the plugin registry changes, not when shell.json does.
+  //
+  // The bar widgets are the one source that is live: the bar patches each
+  // widget's `settings` in place on every change. They hand it over through
+  // adoptSettings(); until the first one has, the barConfig snapshot stands in.
+  property var pushedSettings: null
+  readonly property var settings: pushedSettings !== null
+    ? pushedSettings
+    : Model.entrySettings(shell ? { bar: shell.barConfig } : null, pluginId)
+
+  // One widget per monitor all push the same thing, and the bar injects twice
+  // on purpose; comparing keeps that from restarting the repick timer.
+  function adoptSettings(entry) {
+    var next = ({})
+    for (var key in entry) if (key !== "id") next[key] = entry[key]
+    if (JSON.stringify(next) === JSON.stringify(pushedSettings)) return
+    pushedSettings = next
+  }
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
     return value === undefined || value === null ? fallback : value
@@ -46,6 +64,17 @@ Item {
   property var current: Model.defaultState()
   property var catalog: null
   property string lastError: ""
+
+  // The last pick exited non-zero. With no cache that leaves nothing to show,
+  // and the state file missing is what normally triggers a first pick — so
+  // without this flag a failed pick re-reads the file, finds it missing, picks
+  // again, and spins for as long as the network is down. While it is set,
+  // only the minute tick or a person pressing retry starts another attempt.
+  property bool pickFailed: false
+
+  // What the panel shows instead of "nothing loaded yet": the helper ran, came
+  // back with nothing, and said why.
+  readonly property bool failed: !busy && !hasContent && lastError !== ""
   property bool busy: false
   property bool syncing: false
 
@@ -94,7 +123,13 @@ Item {
   // that fingerprint still matches, so a cosmetic change like the bar display
   // mode costs nothing. Debounced because shell.json is rewritten once per
   // control and a language change writes two keys at once.
-  onSettingsChanged: if (ready) settingsSettle.restart()
+  onSettingsChanged: {
+    // A different edition makes the ayah being looked at a stale one.
+    var key = String(setting("quranEdition", "")) + "|" + String(setting("quranTranslationEdition", ""))
+    if (key !== viewKey) { viewKey = key; resetView() }
+    if (ready) settingsSettle.restart()
+  }
+  property string viewKey: ""
 
   Timer {
     id: settingsSettle
@@ -115,6 +150,7 @@ Item {
 
   function rotate(force) {
     if (!ready) return
+    if (force === true) pickFailed = false
     if (busy) {
       if (force === true) pendingForce = true
       return
@@ -150,6 +186,7 @@ Item {
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.lastError = String(text || "").trim() }
     onExited: function(code) {
       root.busy = false
+      root.pickFailed = code !== 0
       if (code !== 0 && !root.hasContent) stateFile.reload()
       if (root.pendingForce) {
         root.pendingForce = false
@@ -176,8 +213,11 @@ Item {
     if (!Model.hasContent(next)) return
     var changed = next.chosenAt !== root.current.chosenAt
     var first = !root.primed
+    if (changed) resetView()
     root.current = next
     root.primed = true
+    // A new pick is a new history entry.
+    if (changed) root.refreshLists()
     if (!changed || first) return
     root.rotated()
     // Backstop for the case primed cannot see: a second instance of this
@@ -197,7 +237,7 @@ Item {
       // No state file yet: pick the first passage, but stay unprimed so the
       // very first one arrives quietly.
       root.primed = false
-      root.rotate(false)
+      if (!root.pickFailed) root.rotate(false)
     }
   }
 
@@ -294,6 +334,253 @@ Item {
     }
   }
 
+  // --- browsing neighbours ---------------------------------------------------
+
+  // A temporary view: the ayah before or after the one in rotation, read from
+  // the cache by `deen-fetch show`. Nothing is written; the rotation and
+  // current.json are untouched, and a new pick or edition change drops it.
+  property var viewedAyah: null
+  property bool navBusy: false
+  property string navError: ""
+  property string stepOut: ""
+  property string stepErr: ""
+  property int stepWaiting: 0
+  property int stepCode: 0
+  readonly property var shownState: Model.withViewedAyah(current, viewedAyah)
+
+  function stepAyah(delta) {
+    if (navBusy || !ready) return
+    var base = viewedAyah ? viewedAyah : (current ? current.ayah : null)
+    if (!base) return
+    var args = Model.stepArgs(helperPath, settings, base, delta)
+    if (!args) return
+    runShow(args)
+  }
+
+  // Show one specific ayah (from the saved list) the same way a step does: a
+  // temporary view, nothing written. Shares navBusy with stepAyah, so a jump and
+  // a step can never race over the same process.
+  function jumpTo(surah, ayah) {
+    if (navBusy || !ready) return
+    var args = Model.jumpArgs(helperPath, settings, surah, ayah)
+    if (!args) return
+    runShow(args)
+  }
+
+  // The one place a `deen-fetch show` is started. Callers have already checked
+  // navBusy and ready.
+  function runShow(args) {
+    navBusy = true
+    stepOut = ""
+    stepErr = ""
+    stepCode = 0
+    stepWaiting = 3
+    stepProc.command = ["/bin/bash"].concat(args)
+    stepWatchdog.restart()
+    stepProc.running = true
+  }
+
+  // navBusy refuses the next step, so it must never outlive a stuck helper.
+  Timer {
+    id: stepWatchdog
+    interval: 8000
+    onTriggered: {
+      if (!root.navBusy) return
+      stepProc.running = false
+      root.stepFinished(-1, "", "timed out")
+    }
+  }
+
+  // The process is done once it has exited and both pipes have drained.
+  function stepPart() {
+    stepWaiting -= 1
+    if (stepWaiting <= 0) stepFinished(stepCode, stepOut, stepErr)
+  }
+
+  function stepFinished(code, text, err) {
+    navBusy = false
+    stepWatchdog.stop()
+    if (code !== 0) {
+      // An edge ("no previous ayah") is not worth showing; keep the view.
+      navError = String(err || "").trim()
+      return
+    }
+    var obj = null
+    try { obj = JSON.parse(String(text || "")) } catch (e) { obj = null }
+    if (!obj || typeof obj !== "object") {
+      navError = "bad data"
+      return
+    }
+    viewedAyah = obj
+    navError = ""
+  }
+
+  function resetView() {
+    viewedAyah = null
+    navError = ""
+  }
+
+  Process {
+    id: stepProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.stepOut = String(text || ""); root.stepPart() } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.stepErr = String(text || ""); root.stepPart() } }
+    onExited: function(exitCode) { root.stepCode = exitCode; root.stepPart() }
+  }
+
+  // --- favourites and history ------------------------------------------------
+
+  property var favorites: []
+  property var history: []
+  property bool listsBusy: false
+  property string listsError: ""
+  property string listsOut: ""
+  property string listsErr: ""
+  property int listsWaiting: 0
+  property int listsCode: 0
+  readonly property bool shownIsFavorite: Model.isFavorite(favorites, shownState ? shownState.ayah : null)
+
+  function refreshLists() {
+    if (listsBusy || !ready) return
+    var args = Model.listsArgs(helperPath)
+    if (!args) return
+    runLists(args)
+  }
+
+  // Toggles the ayah on screen, which is the viewed one while browsing.
+  function toggleFavorite() {
+    if (listsBusy || !ready) return
+    var args = Model.favoriteArgs(helperPath, shownState ? shownState.ayah : null)
+    if (!args) return
+    runLists(args)
+  }
+
+  function runLists(args) {
+    listsBusy = true
+    listsOut = ""
+    listsErr = ""
+    listsCode = 0
+    listsWaiting = 3
+    listsProc.command = ["/bin/bash"].concat(args)
+    listsWatchdog.restart()
+    listsProc.running = true
+  }
+
+  // listsBusy refuses the next call, so it must never outlive a stuck helper.
+  // No retry afterwards: a failure waits for a person (or the next new pick).
+  Timer {
+    id: listsWatchdog
+    interval: 8000
+    onTriggered: {
+      if (!root.listsBusy) return
+      listsProc.running = false
+      root.listsFinished(-1, "", "timed out")
+    }
+  }
+
+  function listsPart() {
+    listsWaiting -= 1
+    if (listsWaiting <= 0) listsFinished(listsCode, listsOut, listsErr)
+  }
+
+  function listsFinished(code, text, err) {
+    listsBusy = false
+    listsWatchdog.stop()
+    if (code !== 0) {
+      listsError = String(err || "").trim() || "failed"
+      return
+    }
+    // parseLists is forgiving and turns junk into empty lists, which would wipe
+    // good ones; only well-formed JSON gets that far.
+    var probe = null
+    try { probe = JSON.parse(String(text || "")) } catch (e) { probe = null }
+    var parsed = probe && typeof probe === "object" ? Model.parseLists(String(text || "")) : null
+    if (!parsed || !Array.isArray(parsed.favorites) || !Array.isArray(parsed.history)) {
+      listsError = "bad data"
+      return
+    }
+    favorites = parsed.favorites
+    history = parsed.history
+    listsError = ""
+  }
+
+  Process {
+    id: listsProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.listsOut = String(text || ""); root.listsPart() } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.listsErr = String(text || ""); root.listsPart() } }
+    onExited: function(exitCode) { root.listsCode = exitCode; root.listsPart() }
+  }
+
+  onReadyChanged: if (ready) refreshLists()
+
+  // --- clipboard -----------------------------------------------------------
+
+  property bool copied: false
+  property bool copyFailed: false
+  // True from the moment a copy starts until copyFinished has run once.
+  property bool copyPending: false
+  property string copyText: ""
+
+  Timer { id: copiedTimer; interval: 2000; onTriggered: root.copied = false }
+
+  function copyPassage(which) {
+    if (copyProc.running || copyPending) return
+    var text = Model.formatCopy(root.shownState, which || "all")
+    if (!text) return
+    copied = false
+    copyFailed = false
+    copiedTimer.stop()
+    copyPending = true
+    copyText = text
+    // No shell: the text comes from a third-party CDN and goes over stdin only.
+    copyProc.command = ["wl-copy"]
+    // Re-armed on every run. onStarted turns it off to send EOF, and turning
+    // off a property that is already off changes nothing — so on the second
+    // copy the pipe was never closed and wl-copy waited on it forever, with
+    // copyPending held true and every later copy silently refused.
+    copyProc.stdinEnabled = true
+    copyWatchdog.restart()
+    copyProc.running = true
+  }
+
+  // Whatever goes wrong with wl-copy, "pending" must not outlive a few seconds:
+  // it is what refuses the next copy.
+  Timer {
+    id: copyWatchdog
+    interval: 5000
+    onTriggered: {
+      if (!root.copyPending) return
+      copyProc.running = false
+      root.copyFinished(-1)
+    }
+  }
+
+  // Idempotent: exited and the not-running fallback may both report one run.
+  function copyFinished(code) {
+    if (!copyPending) return
+    copyPending = false
+    copyWatchdog.stop()
+    copyText = ""
+    if (code === 0) { copied = true; copiedTimer.restart() }
+    else copyFailed = true
+  }
+
+  Process {
+    id: copyProc
+    stdinEnabled: true
+    // wl-copy reads until EOF, then forks into the background to serve the
+    // selection. Switching stdinEnabled off closes the write channel (Qt
+    // flushes the buffered write first), which is the EOF it waits for.
+    onStarted: {
+      write(root.copyText)
+      stdinEnabled = false
+      root.copyText = ""
+    }
+    onExited: function(code) { root.copyFinished(code) }
+    // A binary that cannot be started (wl-clipboard missing) may never emit a
+    // sensible exit code. Deferred so a real exited signal always wins.
+    onRunningChanged: if (!running) Qt.callLater(function() { root.copyFinished(-1) })
+  }
+
   // --- IPC -----------------------------------------------------------------
 
   // `omarchy-shell shell call` only reaches panel/overlay/menu plugins, so a
@@ -313,12 +600,27 @@ Item {
       out.serviceReady = root.ready
       out.servicePrimed = root.primed
       out.serviceBusy = root.busy
+      out.serviceFailed = root.failed
+      out.lastError = root.lastError
+      out.copied = root.copied
+      out.copyFailed = root.copyFailed
+      out.viewedAyah = root.viewedAyah ? root.viewedAyah.surah + ":" + root.viewedAyah.ayah : null
+      out.navError = root.navError
+      out.favorites = root.favorites.length
+      out.history = root.history.length
+      out.shownFavorite = root.shownIsFavorite
+      out.listsError = root.listsError
       return JSON.stringify(out)
     }
     function next(): string { root.rotate(true); return "ok" }
     function refresh(): string { root.rotate(false); return "ok" }
     function sync(): string { root.sync(); return "ok" }
     function catalog(): string { root.refreshCatalog(); return "ok" }
+    function step(delta: int): string { root.stepAyah(delta); return "ok" }
+    function reset(): string { root.resetView(); return "ok" }
+    function favorite(): string { root.toggleFavorite(); return "ok" }
+    function jump(surah: int, ayah: int): string { root.jumpTo(surah, ayah); return "ok" }
+    function copy(which: string): string { root.copyPassage(which); return "ok" }
   }
 
   onShellChanged: if (shell) Qt.callLater(function() { stateFile.reload(); catalogFile.reload() })
