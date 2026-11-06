@@ -35,6 +35,29 @@ BarWidget {
     if (found && found !== root.service) root.service = found
   }
 
+  // Which of the host bar/shell members this plugin calls are absent. Pure:
+  // names only, never throws, and a null bar reports the bar itself.
+  function missingHostApi(b) {
+    if (!b) return ["bar"]
+    var out = []
+    var fns = ["setCenterHoverRevealSuppressed", "switchPanelFrom"]
+    for (var i = 0; i < fns.length; i++)
+      if (typeof b[fns[i]] !== "function") out.push(fns[i])
+    if (!b.shell) { out.push("shell"); return out }
+    var sfns = ["serviceFor", "updateEntryInline"]
+    for (var j = 0; j < sfns.length; j++)
+      if (typeof b.shell[sfns[j]] !== "function") out.push("shell." + sfns[j])
+    return out
+  }
+
+  property bool _hostChecked: false
+  function checkHost() {
+    if (_hostChecked || !bar) return
+    _hostChecked = true
+    var missing = missingHostApi(bar)
+    if (missing.length > 0) console.warn("daily-deen: host API missing: " + missing.join(", "))
+  }
+
   Timer {
     interval: 500
     repeat: true
@@ -91,7 +114,7 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onBarChanged: { injectPanel(); resolveService() }
+  onBarChanged: { checkHost(); injectPanel(); resolveService() }
   onSettingsChanged: { injectPanel(); feedService() }
   onServiceChanged: { injectPanel(); feedService() }
 

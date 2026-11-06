@@ -180,6 +180,56 @@ A Hyprland keybind, in `~/.config/hypr/bindings.lua`:
 o.bind("SUPER + SHIFT + Q", "Daily ayah", "omarchy-shell shell toggle io.github.kusumaindraputra.daily-deen")
 ```
 
+## Keyboard
+
+With the panel open:
+
+- **Esc** closes it
+- **n** shows another passage (the same as `next` over IPC)
+- **s** opens and closes the settings
+- **Tab** / **Shift+Tab** move to the next or previous panel
+
+While one of the settings pickers is open, every key goes to the picker instead —
+Esc closes the list rather than the panel — so typing in its search field filters
+the list and does not also rotate the passage behind it.
+
+## Troubleshooting
+
+**The panel won't close, or the keyboard seems stuck.** Omarchy 4.0.6 exposes the
+bar's `centerHoverRevealSuppressed` flag as read-only; assigning to it threw a
+`TypeError` that left the panel holding the keyboard. The panel now closes even when
+the bar refuses the flag. If something similar happens, `omarchy restart shell`, then
+look for the cause with `journalctl --user -b | grep daily-deen`.
+
+**Changing a setting or the language does nothing.** Third-party plugins get a
+`PluginShellApi` that has no `shellConfig`, so settings have to be read from the
+plugin's own entry in Omarchy's plugin settings. Older versions looked in the wrong
+place and always saw the defaults. Check what the service actually sees:
+
+```bash
+omarchy-shell io.github.kusumaindraputra.daily-deen status
+```
+
+Besides the current pick, it reports `serviceReady`, `servicePrimed`, `serviceBusy`,
+`serviceFailed` and `lastError`.
+
+**The panel says "Couldn't reach the servers".** Nothing is cached yet and the CDN
+couldn't be reached, so there is nothing to show. Check your connection, then press
+**Try again**, or run the helper yourself to see the real error:
+
+```bash
+bin/deen-fetch catalog --force
+```
+
+Until a pick succeeds the plugin does not retry in a loop; it tries again once a
+minute, or when you press the button. Once something is cached it works offline.
+
+**The panel still behaves as it did before `bin/dev-sync`.** Hot reload can keep
+serving the previous compilation; `omarchy restart shell` (see [Developing](#developing)).
+
+**Arabic looks ragged.** Almost always missing fonts; see the font requirements under
+[Install](#install).
+
 ## Developing
 
 ```bash
