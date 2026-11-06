@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "Grades.js" as Grades
@@ -70,7 +71,7 @@ Panel {
   // system font list, and there is one of these Texts per passage.
   readonly property var installedFonts: Qt.fontFamilies()
 
-  readonly property color contentForeground: bar ? bar.foreground : Color.foreground
+  readonly property color contentForeground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(contentForeground, 1.5)
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -293,7 +294,7 @@ Panel {
                 PanelActionButton {
                   iconText: "\u{F0493}"
                   tooltipText: root.t("settings")
-                  foreground: root.settingsOpen ? Color.accent : root.contentForeground
+                  foreground: root.settingsOpen ? Commons.Color.accent : root.contentForeground
                   onClicked: root.settingsOpen = !root.settingsOpen
                 }
               }
@@ -710,7 +711,7 @@ Panel {
   component ScriptureText: Text {
     property string language: ""
     property string direction: "ltr"
-    property color foreground: Color.foreground
+    property color foreground: Commons.Color.foreground
     property string uiFamily: Style.font.family
     property real scale_: 1.0
 
@@ -727,7 +728,7 @@ Panel {
   }
 
   component Note: Text {
-    property color foreground: Color.foreground
+    property color foreground: Commons.Color.foreground
     property string uiFamily: Style.font.family
 
     color: Qt.darker(foreground, 1.5)
