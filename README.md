@@ -114,6 +114,7 @@ Panel.qml         the popup: content and settings
 Model.js          pure logic (node-testable)
 Grades.js         grade presentation
 I18n.js           nine UI locales
+PasteGuard.js     which keys and clicks paste; the panel's fields refuse them
 bin/deen-fetch    curl + jq: catalog, sync, index, pick
 bin/grades.jq     the grade normaliser
 ```
@@ -217,6 +218,11 @@ While one of the settings pickers is open, every key goes to the picker instead 
 Esc closes the list rather than the panel — so typing in its search field filters
 the list and does not also rotate the passage behind it.
 
+The search fields and the rotation-hours field do not accept a paste (Ctrl+V,
+Shift+Insert, middle click). On Qt 6.12 under Wayland a paste reads the whole
+clipboard synchronously inside the shell, with no size limit, so a misbehaving
+clipboard owner could freeze the bar. Type the filter instead; it is a few letters.
+
 ## Troubleshooting
 
 **The panel won't close, or the keyboard seems stuck.** Omarchy 4.0.6 exposes the
@@ -261,6 +267,7 @@ node --test "tests/*.test.js"    # Model.js, Grades.js, I18n.js
 ./tests/grades.test.sh           # the classifier against the real corpus
 ./tests/pick.test.sh             # rotation and --force, on throwaway fixtures
 ./tests/inputs.test.sh           # what it refuses from the CDN
+./tests/paste.test.sh            # the panel's fields refuse a paste (needs qmltestrunner)
 omarchy plugin validate .
 ./bin/dev-sync                   # copy into ~/.config/omarchy/plugins and reload
 ```

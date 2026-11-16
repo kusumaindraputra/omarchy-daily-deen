@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as QQC
 import Quickshell
 import qs.Commons
 import qs.Commons as Commons
@@ -6,6 +7,7 @@ import qs.Ui
 import "Model.js" as Model
 import "Grades.js" as Grades
 import "I18n.js" as I18n
+import "PasteGuard.js" as PasteGuard
 
 // The popup: the ayah and the hadith in full, and the settings that decide
 // which ones. BarWidget.qml owns the bar pill and hands this panel the button
@@ -772,7 +774,7 @@ Panel {
             // 492 editions never reach a picker as one list: the language comes
             // first, and the edition list is whatever that language has —
             // usually somewhere between one and twenty.
-            SearchableDropdown {
+            SafeSearchableDropdown {
               width: parent.width
               label: root.t("contentLanguage")
               placeholderText: root.t("search")
@@ -783,7 +785,7 @@ Panel {
               onChanged: function(v) { root.setContentLanguage(v) }
             }
 
-            SearchableDropdown {
+            SafeSearchableDropdown {
               id: translationPicker
               width: parent.width
               label: root.t("quranTranslation")
@@ -795,7 +797,7 @@ Panel {
               onChanged: function(v) { root.persist({ quranTranslationEdition: v }) }
             }
 
-            SearchableDropdown {
+            SafeSearchableDropdown {
               width: parent.width
               visible: root.showArabic
               label: root.t("quranEdition")
@@ -807,7 +809,7 @@ Panel {
               onChanged: function(v) { root.persist({ quranEdition: v }) }
             }
 
-            SearchableDropdown {
+            SafeSearchableDropdown {
               width: parent.width
               label: root.t("hadithLanguage")
               placeholderText: root.t("search")
@@ -818,7 +820,7 @@ Panel {
               onChanged: function(v) { root.setHadithLanguage(v) }
             }
 
-            SearchableDropdown {
+            SafeSearchableDropdown {
               id: bookPicker
               width: parent.width
               label: root.t("hadithBook")
@@ -832,7 +834,7 @@ Panel {
 
             // Most book-and-language pairs have exactly one edition, so the
             // picker only earns its space when there is a choice to make.
-            SearchableDropdown {
+            SafeSearchableDropdown {
               id: editionPicker
               width: parent.width
               visible: root.hadithEditions.length > 1
@@ -845,7 +847,7 @@ Panel {
               onChanged: function(v) { root.persist({ hadithEdition: v }) }
             }
 
-            // SearchableDropdown assigns its own `value` when an option is
+            // SafeSearchableDropdown assigns its own `value` when an option is
             // picked, which severs the `value:` binding. These three depend on
             // another picker (a new language changes the edition list and
             // writes a new edition), so without a Binding they keep showing
@@ -866,7 +868,7 @@ Panel {
 
             // The scholars who actually graded this book, read off the index,
             // rather than a fixed list that would be wrong for Muwatta Malik.
-            SearchableDropdown {
+            SafeSearchableDropdown {
               width: parent.width
               visible: root.graderOptions.length > 1
               label: root.t("gradeAuthority")
@@ -878,7 +880,7 @@ Panel {
               onChanged: function(v) { root.persist({ gradeAuthority: v }) }
             }
 
-            NumberField {
+            SafeNumberField {
               label: root.t("rotationHours")
               from: 1
               to: 168
@@ -916,7 +918,7 @@ Panel {
               onChanged: function(v) { root.persist({ barDisplay: v }) }
             }
 
-            SearchableDropdown {
+            SafeSearchableDropdown {
               width: parent.width
               label: root.t("uiLanguage")
               placeholderText: root.t("search")
@@ -1003,5 +1005,435 @@ Panel {
     wrapMode: Text.WordWrap
     textFormat: Text.PlainText
     horizontalAlignment: I18n.isRtlLocale(root.locale) ? Text.AlignRight : Text.AlignLeft
+  }
+
+  // ---- paste-proof inputs
+  //
+  // qs.Ui's SearchableDropdown and NumberField are plain Qt text fields, and a
+  // paste into one reads the clipboard synchronously and without a limit
+  // inside the shell (PasteGuard.js says why that matters). These are the same
+  // controls, with the same look, keys and API as far as this panel uses them,
+  // whose one text input refuses every paste route.
+
+  // A TextInput that never reads the clipboard. Its own key handling goes
+  // through keyPressed, so a user of it cannot accidentally replace the guard.
+  component PasteProofInput: TextInput {
+    id: guarded
+
+    signal keyPressed(var event)
+
+    clip: true
+    Keys.priority: Keys.BeforeItem
+    Keys.onPressed: function(event) {
+      if (PasteGuard.isPasteKey(event, StandardKey.Paste)) { event.accepted = true; return }
+      guarded.keyPressed(event)
+    }
+
+    // Above the text, so a middle click (primary-selection paste) lands here
+    // and is swallowed; a left click passes through to place the caret.
+    MouseArea {
+      anchors.fill: parent
+      z: 1
+      acceptedButtons: PasteGuard.PASTE_BUTTONS
+      onPressed: function(mouse) { mouse.accepted = true; guarded.forceActiveFocus() }
+    }
+  }
+
+  // qs.Ui's SearchableDropdown with the filter field made paste-proof.
+  component SafeSearchableDropdown: Item {
+    id: dd
+
+    property string label: ""
+    property string value: ""
+    property var options: []
+    property string placeholderText: Commons.I18n.t("common.search")
+    property string emptyText: Commons.I18n.t("common.noMatches")
+    property color foreground: Commons.Color.popups.text
+    property color background: Commons.Color.popups.background
+    property color popupBorder: Commons.Color.popups.border
+    property color accent: Commons.Color.accent
+    readonly property var popupBorderSpec: Commons.Border.localOrSurfaceSpec("popups", "border", popupBorder, Commons.Color.popups.border, Style.normalBorderWidth)
+    property string fontFamily: Style.font.family
+    property int rowHeight: Style.spacing.controlHeight
+    property int popupRowHeight: Style.spacing.popupRowHeight
+    property int popupMinHeight: Style.spacing.searchablePopupMinHeight
+
+    // The panel's key catcher stands aside while this is true.
+    readonly property bool popupOpen: popup.opened
+    function open() { popup.open() }
+    function close() { popup.close() }
+
+    signal changed(string value)
+
+    function optionValue(o) { return (o && typeof o === "object") ? String(o.value) : String(o) }
+    function optionLabel(o) { return (o && typeof o === "object") ? String(o.label) : String(o) }
+    function optionDescription(o) { return (o && typeof o === "object" && o.description) ? String(o.description) : "" }
+    function currentLabel() {
+      for (var i = 0; i < options.length; i++)
+        if (optionValue(options[i]) === value) return optionLabel(options[i])
+      return value
+    }
+
+    property var filtered: options
+    function recomputeFiltered() {
+      var q = searchField.text.toLowerCase()
+      if (!q) { filtered = options; return }
+      var out = []
+      for (var i = 0; i < options.length; i++) {
+        if (optionLabel(options[i]).toLowerCase().indexOf(q) !== -1
+            || optionDescription(options[i]).toLowerCase().indexOf(q) !== -1) out.push(options[i])
+      }
+      filtered = out
+    }
+    onOptionsChanged: recomputeFiltered()
+
+    implicitWidth: Style.spacing.searchableDropdownWidth
+    implicitHeight: label !== "" ? rowHeight + Style.spacing.huge : rowHeight
+
+    Column {
+      anchors.fill: parent
+      spacing: Style.spacing.labelGap
+
+      Text {
+        textFormat: Text.PlainText
+        visible: dd.label !== ""
+        text: dd.label
+        color: Qt.darker(dd.foreground, 1.4)
+        font.family: dd.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+
+      BorderSurface {
+        id: trigger
+        width: parent.width
+        height: dd.rowHeight
+        radius: Style.cornerRadius
+
+        readonly property bool _focused: trigger.activeFocus
+        readonly property bool _hot: triggerHover.hovered
+        color: Style.controlFill(_focused, _hot, dd.foreground, dd.accent)
+        borderSpec: Commons.Border.controlSpec(_focused ? "focus" : (_hot ? "hover-cursor" : "normal"), dd.foreground, dd.accent)
+        activeFocusOnTab: true
+
+        HoverHandler { id: triggerHover }
+
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+              || event.key === Qt.Key_Space || event.key === Qt.Key_Down || event.text === "j") {
+            popup.opened ? popup.close() : popup.open()
+            event.accepted = true
+          } else if (event.key === Qt.Key_Escape && popup.opened) {
+            popup.close(); event.accepted = true
+          }
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          anchors.left: parent.left
+          anchors.right: chevron.left
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: trigger.borderLeft + Style.spacing.controlPaddingX
+          anchors.rightMargin: trigger.borderRight + Style.spacing.md
+          text: dd.currentLabel() || dd.placeholderText
+          color: dd.currentLabel() ? dd.foreground : Qt.darker(dd.foreground, 1.5)
+          font.family: dd.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        Text {
+          id: chevron
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.rightMargin: trigger.borderRight + Style.spacing.controlGap
+          text: "󰅀"
+          color: Qt.darker(dd.foreground, 1.2)
+          font.family: dd.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: {
+            trigger.forceActiveFocus()
+            popup.opened ? popup.close() : popup.open()
+          }
+        }
+
+        QQC.Popup {
+          id: popup
+          x: 0
+          y: trigger.height + Style.spacing.xxs
+          width: trigger.width
+          closePolicy: QQC.Popup.CloseOnPressOutsideParent | QQC.Popup.CloseOnEscape
+          implicitHeight: Math.max(dd.popupMinHeight,
+                                   Math.min(resultList.contentHeight + Style.space(50),
+                                            dd.popupRowHeight * 6 + 5 * Style.spacing.labelGap + Style.space(50)))
+          padding: Style.spacing.hairline
+          leftPadding: Commons.Border.left(dd.popupBorderSpec) + Style.spacing.hairline
+          rightPadding: Commons.Border.right(dd.popupBorderSpec) + Style.spacing.hairline
+          topPadding: Commons.Border.top(dd.popupBorderSpec) + Style.spacing.hairline
+          bottomPadding: Commons.Border.bottom(dd.popupBorderSpec) + Style.spacing.hairline
+          focus: true
+
+          background: BorderSurface {
+            color: dd.background
+            borderSpec: dd.popupBorderSpec
+            radius: Style.cornerRadius
+          }
+
+          onOpened: {
+            searchField.text = ""
+            dd.recomputeFiltered()
+            Qt.callLater(function() { searchField.forceActiveFocus() })
+          }
+          onClosed: searchField.text = ""
+
+          contentItem: Column {
+            spacing: 0
+
+            Item {
+              id: searchHeader
+              width: parent.width
+              height: dd.popupRowHeight + Style.spacing.controlPaddingX
+
+              BorderSurface {
+                id: searchBox
+                anchors.fill: parent
+                anchors.margins: Style.spacing.md
+                radius: Style.cornerRadius
+                readonly property var _spec: Commons.Border.controlSpec(searchField.activeFocus ? "focus" : "normal", dd.foreground, dd.accent)
+                color: Style.controlFill(searchField.activeFocus, false, dd.foreground, dd.accent)
+                borderSpec: _spec
+
+                PasteProofInput {
+                  id: searchField
+                  anchors.fill: parent
+                  anchors.leftMargin: Commons.Border.left(searchBox._spec) + Style.spacing.controlPaddingX
+                  anchors.rightMargin: Commons.Border.right(searchBox._spec) + Style.spacing.controlPaddingX
+                  verticalAlignment: TextInput.AlignVCenter
+                  color: dd.foreground
+                  selectionColor: Style.selectionFillFor(dd.foreground, dd.accent)
+                  selectedTextColor: dd.foreground
+                  font.family: dd.fontFamily
+                  font.pixelSize: Style.font.body
+
+                  onTextChanged: {
+                    dd.recomputeFiltered()
+                    if (resultList.count > 0) resultList.currentIndex = 0
+                  }
+
+                  onKeyPressed: function(event) {
+                    if (event.key === Qt.Key_Escape) {
+                      popup.close(); event.accepted = true
+                    } else if (event.key === Qt.Key_Down) {
+                      if (resultList.count > 0) {
+                        resultList.currentIndex = 0
+                        resultList.forceActiveFocus()
+                      }
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                      if (resultList.count > 0) {
+                        resultList.currentIndex = 0
+                        resultList.selectCurrent()
+                      }
+                      event.accepted = true
+                    }
+                  }
+
+                  Text {
+                    anchors.fill: parent
+                    verticalAlignment: Text.AlignVCenter
+                    visible: searchField.text === ""
+                    textFormat: Text.PlainText
+                    text: dd.placeholderText
+                    color: Qt.darker(dd.foreground, 1.6)
+                    font: searchField.font
+                    elide: Text.ElideRight
+                  }
+                }
+              }
+            }
+
+            Rectangle {
+              width: parent.width
+              height: 1
+              color: Qt.rgba(dd.foreground.r, dd.foreground.g, dd.foreground.b, 0.10)
+            }
+
+            Item {
+              width: parent.width
+              height: popup.height - searchHeader.height - Style.spacing.xxs - 1
+
+              Text {
+                textFormat: Text.PlainText
+                anchors.centerIn: parent
+                visible: resultList.count === 0
+                text: dd.emptyText
+                color: Qt.darker(dd.foreground, 1.6)
+                font.family: dd.fontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              ListView {
+                id: resultList
+                anchors.fill: parent
+                spacing: Style.spacing.labelGap
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: dd.filtered
+                currentIndex: -1
+                keyNavigationEnabled: false
+
+                function selectCurrent() {
+                  if (currentIndex < 0 || currentIndex >= dd.filtered.length) return
+                  var v = dd.optionValue(dd.filtered[currentIndex])
+                  dd.value = v
+                  dd.changed(v)
+                  popup.close()
+                }
+
+                Keys.priority: Keys.BeforeItem
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Escape) {
+                    popup.close(); event.accepted = true
+                  } else if (event.key === Qt.Key_Down || event.text === "j") {
+                    if (resultList.currentIndex < resultList.count - 1) resultList.currentIndex++
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Up || event.text === "k") {
+                    if (resultList.currentIndex <= 0) searchField.forceActiveFocus()
+                    else resultList.currentIndex--
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    resultList.selectCurrent(); event.accepted = true
+                  }
+                }
+
+                delegate: Rectangle {
+                  required property var modelData
+                  required property int index
+                  width: resultList.width
+                  height: Math.max(dd.popupRowHeight, rowContent.implicitHeight + Style.spacing.rowPaddingX)
+                  color: index === resultList.currentIndex ? Style.hoverFillFor(dd.foreground, dd.accent) : "transparent"
+
+                  Column {
+                    id: rowContent
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Style.spacing.controlPaddingX
+                    anchors.rightMargin: Style.spacing.controlPaddingX
+                    spacing: Style.spacing.xxs
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: dd.optionLabel(modelData)
+                      color: index === resultList.currentIndex ? Style.hoverStateColor(dd.foreground, dd.accent) : dd.foreground
+                      font.family: dd.fontFamily
+                      font.pixelSize: Style.font.body
+                      elide: Text.ElideRight
+                      width: parent.width
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      visible: text !== ""
+                      text: dd.optionDescription(modelData)
+                      color: Qt.darker(dd.foreground, 1.5)
+                      font.family: dd.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                      width: parent.width
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onPositionChanged: resultList.currentIndex = parent.index
+                    onClicked: resultList.selectCurrent()
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // qs.Ui's NumberField with its text input made paste-proof.
+  component SafeNumberField: Column {
+    id: nf
+
+    property string label: ""
+    property int value: 0
+    property int from: 0
+    property int to: 100
+    property int stepSize: 1
+    property color foreground: Commons.Color.foreground
+    property color accent: Commons.Color.accent
+    property string fontFamily: Style.font.family
+    property real fontSize: Style.font.body
+    property real fieldWidth: Style.spacing.numberFieldWidth
+
+    signal modified(int value)
+
+    spacing: Style.spacing.md
+
+    Text {
+      textFormat: Text.PlainText
+      visible: nf.label !== ""
+      text: nf.label
+      color: Qt.darker(nf.foreground, 1.4)
+      font.family: nf.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    QQC.SpinBox {
+      id: spin
+      width: nf.fieldWidth
+      implicitHeight: Math.max(Style.spacing.controlHeight, nf.fontSize + Style.spacing.controlPaddingY * 2)
+      from: nf.from
+      to: nf.to
+      stepSize: nf.stepSize
+      value: nf.value
+      editable: true
+      font.family: nf.fontFamily
+      font.pixelSize: nf.fontSize
+
+      readonly property bool _focused: spin.activeFocus
+      readonly property var _spec: Commons.Border.controlSpec(_focused ? "focus" : (spinHover.hovered ? "hover-cursor" : "normal"), nf.foreground, nf.accent)
+
+      leftPadding: Commons.Border.left(_spec) + Style.spacing.controlPaddingX
+      rightPadding: Commons.Border.right(_spec) + Style.spacing.controlPaddingX
+      topPadding: Commons.Border.top(_spec)
+      bottomPadding: Commons.Border.bottom(_spec)
+
+      onValueModified: nf.modified(value)
+
+      HoverHandler { id: spinHover }
+
+      background: BorderSurface {
+        color: Style.controlFill(spin._focused, spinHover.hovered, nf.foreground, nf.accent)
+        borderSpec: spin._spec
+        radius: Style.cornerRadius
+      }
+
+      contentItem: PasteProofInput {
+        text: spin.displayText
+        font: spin.font
+        color: nf.foreground
+        selectionColor: Style.selectionFillFor(nf.foreground, nf.accent)
+        selectedTextColor: nf.foreground
+        horizontalAlignment: Qt.AlignHCenter
+        verticalAlignment: Qt.AlignVCenter
+        readOnly: !spin.editable
+        validator: spin.validator
+        inputMethodHints: Qt.ImhFormattedNumbersOnly
+      }
+    }
   }
 }
